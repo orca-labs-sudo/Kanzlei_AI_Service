@@ -136,6 +136,75 @@ TOOL_DECLARATIONS: List[Dict] = [
             "required": ["aktenzeichen"],
         },
     },
+    {
+        "name": "get_akten_by_empfehlung",
+        "description": (
+            "Akten abrufen, deren Mandant über eine bestimmte Empfehlung/Quelle kam. "
+            "Z.B. 'Wie viele Akten wurden im März auf Empfehlung von Max geöffnet?' "
+            "Kann nach Monat und Jahr gefiltert werden."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "empfehlung": {
+                    "type": "string",
+                    "description": "Name oder Quelle der Empfehlung (Teilstring-Suche), z.B. 'Max', 'Google Ads'",
+                },
+                "monat": {
+                    "type": "integer",
+                    "description": "Monat (1–12)",
+                },
+                "jahr": {
+                    "type": "integer",
+                    "description": "Jahr (z.B. 2026)",
+                },
+            },
+            "required": ["empfehlung"],
+        },
+    },
+    {
+        "name": "get_akten_ohne_dokument",
+        "description": (
+            "Akten abrufen, die ein bestimmtes Dokument NICHT enthalten. "
+            "Z.B. Akten ohne Erstanschreiben, ohne Klageschrift, ohne Vollmacht. "
+            "Kann zusätzlich nach Gegner (Versicherung) und Status gefiltert werden."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "dokument_stichwort": {
+                    "type": "string",
+                    "description": "Stichwort im Dokumenttitel, z.B. 'Erstanschreiben', 'Vollmacht', 'Klageschrift'",
+                },
+                "gegner": {
+                    "type": "string",
+                    "description": "Name der Gegnerpartei/Versicherung (Teilstring), z.B. 'MDT', 'HUK', 'Allianz'",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Aktenstatus: 'Offen', 'Geschlossen' oder 'Archiviert'",
+                },
+            },
+            "required": ["dokument_stichwort"],
+        },
+    },
+    {
+        "name": "get_akten_by_gegner",
+        "description": (
+            "Alle Akten einer bestimmten Gegnerpartei oder Versicherung abrufen. "
+            "Z.B. alle Fälle gegen MDT, HUK, Allianz."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "gegner": {
+                    "type": "string",
+                    "description": "Name der Gegnerpartei/Versicherung (Teilstring-Suche), z.B. 'MDT', 'HUK'",
+                },
+            },
+            "required": ["gegner"],
+        },
+    },
 ]
 
 
@@ -153,7 +222,7 @@ class QueryService:
         self.gemini_api_key = settings.gemini_api_key
         self.gemini_url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/"
-            f"gemini-2.0-flash:generateContent?key={self.gemini_api_key}"
+            f"{settings.gemini_model}:generateContent?key={self.gemini_api_key}"
         )
         self.django_base = settings.backend_url.rstrip("/")
         self.django_headers = {
@@ -268,6 +337,9 @@ class QueryService:
             "get_akten_ohne_fragebogen": self._get_akten_ohne_fragebogen,
             "get_fristen_naechste_tage": self._get_fristen_naechste_tage,
             "get_akte_by_aktenzeichen": self._get_akte_by_aktenzeichen,
+            "get_akten_by_empfehlung": self._get_akten_by_empfehlung,
+            "get_akten_ohne_dokument": self._get_akten_ohne_dokument,
+            "get_akten_by_gegner": self._get_akten_by_gegner,
         }
 
         handler = tool_map.get(tool_name)
@@ -341,6 +413,21 @@ class QueryService:
     async def _get_akte_by_aktenzeichen(self, aktenzeichen: str):
         return await self._get("akte_by_az/", {"aktenzeichen": aktenzeichen})
 
+    async def _get_akten_ohne_dokument(self, dokument_stichwort: str, gegner: str = None, status: str = None):
+        params = {"dokument_stichwort": dokument_stichwort}
+        if gegner: params["gegner"] = gegner
+        if status: params["status"] = status
+        return await self._get("akten_ohne_dokument/", params)
+
+    async def _get_akten_by_gegner(self, gegner: str):
+        return await self._get("akten_by_gegner/", {"gegner": gegner})
+
+    async def _get_akten_by_empfehlung(self, empfehlung: str, monat: int = None, jahr: int = None):
+        params = {"empfehlung": empfehlung}
+        if monat: params["monat"] = monat
+        if jahr: params["jahr"] = jahr
+        return await self._get("akten_by_empfehlung/", params)
+
     # -----------------------------------------------------------------------
     # Ergebnis-Formatierung → Frontend-Format
     # -----------------------------------------------------------------------
@@ -374,7 +461,7 @@ class QueryService:
                 "query_used": tool_name,
             }
 
-        if tool_name in ("get_akten_liste", "get_akten_ohne_fragebogen"):
+        if tool_name in ("get_akten_liste", "get_akten_ohne_fragebogen", "get_akten_ohne_dokument", "get_akten_by_gegner"):
             akten = raw_data.get("akten", [])
             rows = [
                 [a["aktenzeichen"], a["mandant"], a["gegner"], a["status"], a.get("erstellt_am", "")]
