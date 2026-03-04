@@ -57,3 +57,7 @@ rag_storage/
 
 # Claude Code
 .claude/
+
+# Google Credentials (NIEMALS einchecken!)
+google_service_account.json
+*_service_account.json

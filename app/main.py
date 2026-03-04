@@ -1,7 +1,7 @@
 """
 FastAPI Main Application — Kanzlei AI Service
 """
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, BackgroundTasks
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, BackgroundTasks, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Any
@@ -99,6 +99,16 @@ def get_gemini_client():
 # ENDPUNKTE
 # ===========================================================================
 
+def verify_hmac(
+    x_ki_signature: Optional[str] = Header(None, alias="X-KI-Signature"),
+    authorization: Optional[str] = Header(None)
+):
+    from app.services.hmac_auth import verify_ki_signature
+    auth_header = x_ki_signature or authorization
+    if not verify_ki_signature(auth_header):
+        raise HTTPException(status_code=403, detail="Ungültige oder fehlende HMAC-Signatur")
+
+
 @app.get("/")
 async def root():
     """Root endpoint"""
@@ -122,7 +132,7 @@ async def health_check():
     }
 
 
-@app.post("/api/vorlagen/suggest", response_model=VorlagenSuggestResponse)
+@app.post("/api/vorlagen/suggest", response_model=VorlagenSuggestResponse, dependencies=[Depends(verify_hmac)])
 async def vorlagen_suggest(request: VorlagenSuggestRequest):
     """
     KI-Baustein-Empfehlung für Erstanschreiben.
@@ -213,7 +223,7 @@ def _chunk_text(raw_text: str, chunk_size: int = 500) -> list[str]:
     return final_chunks
 
 
-@app.post("/api/rag/ingest")
+@app.post("/api/rag/ingest", dependencies=[Depends(verify_hmac)])
 async def rag_ingest_document(request: RagIngestRequest):
     """
     Speichert einen Text (z.B. ein erfolgreiches Kanzleischreiben) im ChromaDB Vektor-Store.
@@ -276,7 +286,7 @@ class RagSearchRequest(BaseModel):
     k_results: int = 3
 
 
-@app.post("/api/rag/search")
+@app.post("/api/rag/search", dependencies=[Depends(verify_hmac)])
 async def rag_search_documents(request: RagSearchRequest):
     """
     Sucht in der lokalen ChromaDB nach den ähnlichsten Text-Chunks.
@@ -314,7 +324,105 @@ class RagDraftRequest(BaseModel):
     fall_typ: Optional[str] = None
 
 
-@app.post("/api/rag/draft")
+class SchreibenRequest(BaseModel):
+    """Request-Modell für POST /api/schreiben/ (Task N-G1)"""
+    user_kontext: str
+    akte_kontext: dict
+    schreiben_typ: Optional[str] = None
+
+
+@app.post("/api/schreiben/", dependencies=[Depends(verify_hmac)])
+async def generiere_schreiben(request: SchreibenRequest):
+    """
+    N-G1: Generiert einen Kanzlei-Brief (Fließtext) basierend auf User-Eingaben
+    und dem Akten-Kontext.
+    """
+    gemini = get_gemini_client()
+    if not gemini:
+        raise HTTPException(status_code=503, detail="Gemini API ist nicht konfiguriert.")
+        
+    try:
+        system_instruction = (
+            "Du bist ein erfahrener Rechtsanwalt. Formuliere einen professionellen "
+            "Brieftext basierend auf dem vom Benutzer bereitgestellten Kontext.\n\n"
+            "WICHTIG: Generiere NUR den Inhalt (Fließtext).\n"
+            "KEIN Briefkopf, KEINE Anrede, KEIN 'Mit freundlichen Grüßen', KEINE Signatur.\n"
+            "Beginne direkt mit dem ersten inhaltlichen Absatz.\n"
+            "Halte den rechtlichen Ton professionell und präzise."
+        )
+        
+        prompt = (
+            f"AKTEN-KONTEXT:\n{request.akte_kontext}\n\n"
+            f"VORGABE / USER-KONTEXT:\n{request.user_kontext}\n\n"
+            f"SCHREIBEN-TYP:\n{request.schreiben_typ or 'Allgemein'}\n\n"
+            "Bitte generiere jetzt den Brieftext (nur Fließtext)."
+        )
+        
+        # Nutzen der client library async via Task falls nicht nativ async implementiert
+        import asyncio
+        loop = asyncio.get_event_loop()
+        # Hinweis: gemini_client.generate_content ist u.U. synchron in diesem Projekt
+        response_text = await loop.run_in_executor(
+            None, 
+            lambda: gemini.generate_content(prompt, system_instruction=system_instruction)
+        )
+        
+        return {"brief_text": response_text.strip()}
+        
+    except Exception as e:
+        logger.error(f"Fehler bei /api/schreiben/: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fehler bei der Brief-Generierung: {str(e)}"
+        )
+
+
+class DocsCreateRequest(BaseModel):
+    """Request-Modell für POST /api/docs/create/"""
+    titel: str
+    inhalt: str
+    upload_pdf: bool = False
+
+
+@app.post("/api/docs/create/", dependencies=[Depends(verify_hmac)])
+async def create_google_doc(request: DocsCreateRequest):
+    """
+    Erstellt ein Google Doc (und optional ein PDF in Drive) über die Clients.
+    Returns: {"doc_url": "...", "drive_url": "..."}
+    """
+    from app.services.google_docs_client import google_docs_client
+    from app.services.google_drive_client import google_drive_client
+    
+    doc_url = None
+    drive_url = None
+    
+    try:
+        # 1. Google Doc erstellen
+        doc_url = google_docs_client.create_doc(request.titel, request.inhalt)
+        
+        # 2. Optional: PDF in Google Drive laden (vereinfachte Text-to-PDF für Mock)
+        if request.upload_pdf:
+            # TODO: Falls ein echter PDF-Renderer wie WeasyPrint/ReportLab eingebaut ist, hier nutzen
+            # Vorerst für Drive als einfaches bytestring
+            fake_pdf_bytes = request.inhalt.encode("utf-8")
+            pdf_filename = f"{request.titel}.pdf"
+            if not pdf_filename.endswith(".pdf"):
+                pdf_filename += ".pdf"
+            drive_url = google_drive_client.upload_pdf(pdf_filename, fake_pdf_bytes)
+            
+        return {
+            "doc_url": doc_url,
+            "drive_url": drive_url
+        }
+    except Exception as e:
+        logger.error(f"Fehler bei /api/docs/create/: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Fehler bei der Google Workspace Generierung: {str(e)}"
+        )
+
+
+@app.post("/api/rag/draft", dependencies=[Depends(verify_hmac)])
 async def rag_generate_draft(request: RagDraftRequest):
     """
     Kombiniert RAG-Wissen mit einem LLM-Aufruf, um einen echten Brief zu entwerfen.
@@ -333,7 +441,7 @@ async def rag_generate_draft(request: RagDraftRequest):
             
         search_query = " ".join(query_parts)
         
-        matches = rag_store.search_similar(
+        matches = await rag_store.search_similar(
             query_text=search_query,
             n_results=3,
             filter_dict=filter_dict
@@ -359,7 +467,7 @@ async def rag_generate_draft(request: RagDraftRequest):
         )
 
 
-@app.get("/api/rag/stats")
+@app.get("/api/rag/stats", dependencies=[Depends(verify_hmac)])
 async def rag_get_stats():
     """
     Liefert Statistiken (Anzahl Dokumente, Sättigung) über die RAG-Wissensdatenbank.
@@ -382,7 +490,7 @@ async def rag_get_stats():
         )
 
 
-@app.delete("/api/rag/delete/{document_id}")
+@app.delete("/api/rag/delete/{document_id}", dependencies=[Depends(verify_hmac)])
 async def rag_delete_document(document_id: str):
     """
     Löscht ein bestimmtes Dokument (und alle seine Chunks) aus dem RAG Speicher.
@@ -414,7 +522,7 @@ async def rag_delete_document(document_id: str):
         )
 
 
-@app.post("/api/rag/ingest/file")
+@app.post("/api/rag/ingest/file", dependencies=[Depends(verify_hmac)])
 async def rag_ingest_file(
     file: UploadFile = File(...),
     fall_typ: str = Form(""),
@@ -480,7 +588,7 @@ async def rag_ingest_file(
         )
 
 
-@app.delete("/api/rag/delete/{document_id}")
+@app.delete("/api/rag/delete/{document_id}", dependencies=[Depends(verify_hmac)])
 async def rag_delete_document(document_id: str):
     """
     Löscht alle Chunks für eine bestimmte document_id aus dem RAG Store.
@@ -702,7 +810,7 @@ async def process_email_background_task(job_id: str, email_content_bytes: bytes,
         job_tracker.fail_job(job_id, str(e))
 
 
-@app.post("/api/akte/create-from-email")
+@app.post("/api/akte/create-from-email", dependencies=[Depends(verify_hmac)])
 async def create_akte_from_email(
     background_tasks: BackgroundTasks,
     email_file: UploadFile = File(...),
@@ -741,7 +849,7 @@ class QueryRequest(BaseModel):
     user_id: Optional[int] = None
 
 
-@app.post("/api/query/")
+@app.post("/api/query/", dependencies=[Depends(verify_hmac)])
 async def handle_query(request: QueryRequest):
     """
     MCP-Sekretärin: Freitext → Gemini Function Calling → Django-Daten → formatiertes Ergebnis.

@@ -3,6 +3,12 @@ import os
 import chromadb
 from chromadb.config import Settings
 from typing import List, Dict, Any, Optional
+from chromadb.api.types import EmbeddingFunction, Documents, Embeddings
+
+class DummyEmbeddingFunction(EmbeddingFunction):
+    """Bypasses Chroma's default model download since we use Vertex/Gemini."""
+    def __call__(self, input: Documents) -> Embeddings:
+        return [[0.0] * 768 for _ in input]
 
 logger = logging.getLogger(__name__)
 
@@ -15,6 +21,7 @@ class RAGStore:
         self.persist_directory = persist_directory
         self._client = None
         self._collection = None
+        self._system_collection = None
         
         # Stelle sicher, dass das Verzeichnis existiert
         if not os.path.exists(self.persist_directory):
@@ -32,16 +39,27 @@ class RAGStore:
             )
             logger.info(f"✓ ChromaDB verbunden (Pfad: {self.persist_directory})")
             
+            # Nutze ein Dummy-Embedding, da wir via Vertex einbetten
+            dummy_ef = DummyEmbeddingFunction()
+            
             # Hole oder erstelle die Haupt-Collection für Kanzlei-Fälle
             self._collection = self._client.get_or_create_collection(
                 name="kanzlei_wissen",
+                embedding_function=dummy_ef,
                 metadata={"description": "Referenzschreiben und Fallwissen"}
+            )
+            
+            # Hole oder erstelle die Collection für das System-Wissen der Kanzlei
+            self._system_collection = self._client.get_or_create_collection(
+                name="system_wissen",
+                embedding_function=dummy_ef,
+                metadata={"description": "Dokumentation über das Kanzlei-Programm"}
             )
         except Exception as e:
             logger.error(f"✗ Fehler bei ChromaDB Initialisierung: {e}")
             self._client = None
 
-    async def add_documents(self, documents: List[str], metadatas: List[Dict[str, Any]], ids: List[str]):
+    async def add_documents(self, documents: List[str], metadatas: List[Dict[str, Any]], ids: List[str], collection_name: str = "kanzlei_wissen"):
         """
         Fügt Text-Chunks zur Vektordatenbank hinzu.
         
@@ -49,9 +67,12 @@ class RAGStore:
             documents: Liste von Rohtexten (Chunks)
             metadatas: Liste von Metadaten-Dicts (z.B. {"fall_typ": "auffahrunfall", "akte": "123"})
             ids: Eindeutige IDs für jeden Chunk (z.B. "akte_123_chunk_1")
+            collection_name: Name der Collection ('kanzlei_wissen' oder 'system_wissen')
         """
-        if not self._collection:
-            logger.error("RAG Store nicht initialisiert!")
+        target_collection = self._system_collection if collection_name == "system_wissen" else self._collection
+        
+        if not target_collection:
+            logger.error(f"RAG Store Collection '{collection_name}' nicht initialisiert!")
             return False
             
         try:
@@ -59,7 +80,7 @@ class RAGStore:
             embeddings = await self._get_vertex_embeddings(documents)
             
             if embeddings:
-                self._collection.upsert(
+                target_collection.upsert(
                     documents=documents,
                     embeddings=embeddings,
                     metadatas=metadatas,
@@ -68,16 +89,16 @@ class RAGStore:
             else:
                 # Fallback: ChromaDB Default Embeddings (all-MiniLM-L6-v2) 
                 # Nur lokal für Development, wenn kein Vertex Key da ist
-                self._collection.upsert(
+                target_collection.upsert(
                     documents=documents,
                     metadatas=metadatas,
                     ids=ids
                 )
                 
-            logger.info(f"✓ {len(documents)} Chunks erfolgreich in RAG Store gespeichert.")
+            logger.info(f"✓ {len(documents)} Chunks erfolgreich in RAG Store ({collection_name}) gespeichert.")
             return True
         except Exception as e:
-            logger.error(f"✗ Fehler beim Speichern im RAG Store: {e}")
+            logger.error(f"✗ Fehler beim Speichern im RAG Store ({collection_name}): {e}")
             return False
 
     async def _get_vertex_embeddings(self, texts: List[str]) -> Optional[List[List[float]]]:
@@ -122,7 +143,7 @@ class RAGStore:
             logger.error(f"Vertex Embedding API Fehler: {e}")
             return None
 
-    def search_similar(self, query_text: str, n_results: int = 3, filter_dict: Optional[Dict] = None) -> List[Dict]:
+    async def search_similar(self, query_text: str, n_results: int = 3, filter_dict: Optional[Dict] = None, collection_name: str = "kanzlei_wissen") -> List[Dict]:
         """
         Sucht nach ähnlichen Dokumenten basierend auf einem Suchtext.
         
@@ -130,20 +151,35 @@ class RAGStore:
             query_text: Der Text, nach dem gesucht wird (z.B. Kontext des neuen Falls)
             n_results: Anzahl der gewünschten Treffer
             filter_dict: Optionaler Filter (z.B. {"fall_typ": "auffahrunfall"})
+            collection_name: Name der Collection
             
         Returns:
             Liste von Dictionaries mit den Chunks und Metadaten.
         """
-        if not self._collection:
-            logger.error("RAG Store nicht initialisiert!")
+        target_collection = self._system_collection if collection_name == "system_wissen" else self._collection
+        
+        if not target_collection:
+            logger.error(f"RAG Store Collection '{collection_name}' nicht initialisiert!")
             return []
             
         try:
-            results = self._collection.query(
-                query_texts=[query_text],
-                n_results=n_results,
-                where=filter_dict
-            )
+            # Versuche zuerst die Vertex Embeddings zu holen
+            embeddings = await self._get_vertex_embeddings([query_text]) if hasattr(self, '_get_vertex_embeddings') else None
+            
+            if embeddings:
+                results = target_collection.query(
+                    query_embeddings=embeddings,
+                    n_results=n_results,
+                    where=filter_dict
+                )
+            else:
+                # Fallback
+                results = target_collection.query(
+                    query_texts=[query_text],
+                    n_results=n_results,
+                    where=filter_dict
+                )
+            
             
             # ChromaDB gibt Arrays von Arrays zurück, da mehrere Queries möglich sind.
             # Da wir nur 1 Query senden, nehmen wir Index [0].

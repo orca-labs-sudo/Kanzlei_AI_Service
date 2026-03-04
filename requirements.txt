@@ -32,6 +32,10 @@ aiofiles==23.2.1
 # Logging
 loguru==0.7.2
 
+# Google Workspace
+google-api-python-client==2.111.0
+google-auth==2.27.0
+
 # Testing (optional)
 pytest==7.4.4
 pytest-asyncio==0.23.3

@@ -13,9 +13,13 @@ class OrchestratorService:
     def __init__(self):
         self.system_prompt = (
             "Du bist ein hochqualifizierter KI-Assistent für eine Anwaltskanzlei (Verkehrsrecht). "
-            "Deine Aufgabe ist es, professionelle Erstanschreiben zu entwerfen. "
-            "Nutze zwingend den juristischen Tonfall, zitiere relevante Gesetze (§ 7 StVG, § 115 VVG) "
-            "und formuliere präzise Aufforderungen wie in den Beispielen, die dir als Kontext mitgegeben werden."
+            "Deine Aufgabe ist es, professionelle Erstanschreiben an gegnerische Versicherungen oder Schädiger zu entwerfen. "
+            "WICHTIGSTE REGEL: Generiere AUSSCHLIESSLICH den reinen Fließtext des Briefes. "
+            "Kein Briefkopf, keine Absender-/Empfängeradressen, kein Datum, kein Betreff und KEINE Grußformel am Ende. "
+            "Nutze zwingend den juristischen Tonfall und beachte folgende Vorgaben strikt:\n"
+            "1. Zitiere immer die relevanten Anspruchsgrundlagen, insbesondere §§ 7, 18 StVG sowie § 115 VVG (Direktanspruch gegen die Haftpflichtversicherung).\n"
+            "2. Setze für Zahlungs- oder Antwortaufforderungen standardmäßig eine Frist von 14 Tagen ab Zugang des Schreibens, sofern in den Notizen nichts anderes angegeben ist.\n"
+            "3. Formuliere präzise Aufforderungen wie in den Beispielen, die dir als Kontext mitgegeben werden."
         )
 
     async def generate_draft(self, fall_daten: Dict[str, Any], notizen: str, rag_context: List[Dict[str, Any]]) -> str:
@@ -59,7 +63,7 @@ Gib NUR den Text des Anschreibens ohne Metakommentar zurück.
 """
         
         # 4. REST Call an Vertex AI (ohne SDK)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={settings.gemini_api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={settings.gemini_api_key}"
         headers = {"Content-Type": "application/json"}
         payload = {
             "contents": [{
@@ -85,6 +89,9 @@ Gib NUR den Text des Anschreibens ohne Metakommentar zurück.
                     logger.error(f"Unbekanntes API-Format: {data}")
                     return "Fehler bei der Textgenerierung (Format)."
                     
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP Fehler beim Gemini Call: {e.response.status_code} - {e.response.text}")
+            return f"Fehler bei der Kommunikation mit der Künstlichen Intelligenz (HTTP {e.response.status_code})."
         except Exception as e:
             logger.error(f"Fehler beim Vertex/Gemini Call: {e}")
             return "Fehler bei der Kommunikation mit der Künstlichen Intelligenz."

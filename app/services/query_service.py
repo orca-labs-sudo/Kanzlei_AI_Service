@@ -205,6 +205,24 @@ TOOL_DECLARATIONS: List[Dict] = [
             "required": ["gegner"],
         },
     },
+    {
+        "name": "erstelle_brief_aus_kontext",
+        "description": "Erstellt einen professionellen Brieftext wenn der User einen Text/Begründung eingibt und daraus einen Brief formuliert haben möchte.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "user_kontext": {
+                    "type": "string",
+                    "description": "Der vom User eingefügte Text / die Begründung"
+                },
+                "schreiben_typ": {
+                    "type": "string",
+                    "description": "widerspruch | anfrage | mahnung | sonstig"
+                }
+            },
+            "required": ["user_kontext"],
+        },
+    },
 ]
 
 
@@ -243,16 +261,8 @@ class QueryService:
         function_call = await self._classify_with_gemini(query)
 
         if not function_call:
-            return {
-                "status": "ok",
-                "result_type": "text",
-                "data": (
-                    "Ich konnte die Anfrage leider keinem meiner Werkzeuge zuordnen. "
-                    "Versuche es mit einer spezifischeren Frage, z.B. "
-                    "\"Zeig mir alle offenen Akten\" oder \"Wieviele Fälle gibt es dieses Jahr?\"."
-                ),
-                "query_used": None,
-            }
+            logger.info("Kein Tool gewählt -> Fallback auf System-Wissen RAG")
+            return await self._handle_rag_fallback(query)
 
         tool_name = function_call.get("name")
         tool_args = function_call.get("args", {})
@@ -324,6 +334,72 @@ class QueryService:
             logger.error(f"Gemini Function Calling Fehler: {e}")
             return None
 
+    async def _handle_rag_fallback(self, query: str) -> Dict[str, Any]:
+        """Sucht im system_wissen via RAG und generiert eine Antwort mit Gemini."""
+        from app.services.rag_store import rag_store
+        
+        # 1. RAG-Abfrage in der System-Doku
+        matches = await rag_store.search_similar(query_text=query, n_results=3, collection_name="system_wissen")
+        
+        if not matches:
+            return {
+                "status": "ok",
+                "result_type": "text",
+                "data": (
+                    "Ich konnte die Anfrage leider keinem meiner Werkzeuge zuordnen "
+                    "und habe dazu auch keine Informationen in meiner System-Doku gefunden. "
+                    "Versuche es mit einer spezifischeren Frage."
+                ),
+                "query_used": "fallback",
+            }
+            
+        # 2. Kontext zusammenbauen
+        context_texts = []
+        for match in matches:
+            context_texts.append(match.get("text", ""))
+        context_str = "\n\n---\n\n".join(context_texts)
+        
+        # 3. Gemini Response generieren
+        system_prompt = (
+            "Du bist ein hilfreicher Assistent für das Kanzlei-Programm. "
+            "Beantworte die Frage des Nutzers AUSSCHLIESSLICH basierend auf dem folgenden System-Wissen. "
+            "Erfinde keine Funktionen hinzu. Halte dich kurz und prägnant."
+        )
+        
+        prompt = f"{system_prompt}\n\nSYSTEM-WISSEN:\n{context_str}\n\nFRAGE DES NUTZERS:\n{query}"
+        
+        payload = {
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"temperature": 0.2}
+        }
+        
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                response = await client.post(self.gemini_url, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                
+                candidates = data.get("candidates", [])
+                if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
+                    answer_text = candidates[0]["content"]["parts"][0].get("text", "")
+                    return {
+                        "status": "ok",
+                        "result_type": "text",
+                        "data": answer_text,
+                        "query_used": "rag_system_wissen",
+                    }
+                else:
+                    return {
+                        "status": "error",
+                        "error": "Konnte keine Antwort aus dem System-Wissen generieren."
+                    }
+        except Exception as e:
+            logger.error(f"Fehler bei der Fallback-Antwort Generierung: {e}")
+            return {
+                "status": "error",
+                "error": "Fehler bei der Formulierung der System-Antwort."
+            }
+
     # -----------------------------------------------------------------------
     # Tool-Dispatch → Django /api/ai/query/* Endpoints
     # -----------------------------------------------------------------------
@@ -340,6 +416,7 @@ class QueryService:
             "get_akten_by_empfehlung": self._get_akten_by_empfehlung,
             "get_akten_ohne_dokument": self._get_akten_ohne_dokument,
             "get_akten_by_gegner": self._get_akten_by_gegner,
+            "erstelle_brief_aus_kontext": self._erstelle_brief_aus_kontext,
         }
 
         handler = tool_map.get(tool_name)
@@ -428,6 +505,42 @@ class QueryService:
         if jahr: params["jahr"] = jahr
         return await self._get("akten_by_empfehlung/", params)
 
+    async def _erstelle_brief_aus_kontext(self, user_kontext: str, schreiben_typ: str = None):
+        """
+        N-G2 Tool Handler: Generiert einen Brief-Rohtext direkt hier im AI-Service.
+        """
+        from app.main import get_gemini_client
+        gemini = get_gemini_client()
+        if not gemini:
+            return {"error": "Gemini API nicht bereit", "brief_text": "Lokale Generierung nicht möglich."}
+            
+        system_instruction = (
+            "Du bist ein erfahrener Rechtsanwalt. Formuliere einen professionellen "
+            "Brieftext basierend auf dem vom Benutzer bereitgestellten Kontext.\n\n"
+            "WICHTIG: Generiere NUR den Inhalt (Fließtext).\n"
+            "KEIN Briefkopf, KEINE Anrede, KEIN 'Mit freundlichen Grüßen', KEINE Signatur.\n"
+            "Beginne direkt mit dem ersten inhaltlichen Absatz.\n"
+            "Halte den rechtlichen Ton professionell und präzise."
+        )
+        
+        prompt = (
+            f"VORGABE / USER-KONTEXT:\n{user_kontext}\n\n"
+            f"SCHREIBEN-TYP:\n{schreiben_typ or 'Allgemein'}\n\n"
+            "Bitte generiere jetzt den Brieftext (nur Fließtext)."
+        )
+        
+        import asyncio
+        loop = asyncio.get_event_loop()
+        response_text = await loop.run_in_executor(
+            None, 
+            lambda: gemini.generate_content(prompt, system_instruction=system_instruction)
+        )
+        
+        return {
+            "brief_text": response_text.strip(),
+            "schreiben_typ": schreiben_typ or "sonstig"
+        }
+
     # -----------------------------------------------------------------------
     # Ergebnis-Formatierung → Frontend-Format
     # -----------------------------------------------------------------------
@@ -441,6 +554,15 @@ class QueryService:
                 "result_type": "number",
                 "data": raw_data.get("count", 0),
                 "label": raw_data.get("label", "Fälle"),
+                "query_used": tool_name,
+            }
+
+        if tool_name == "erstelle_brief_aus_kontext":
+            return {
+                "status": "ok",
+                "result_type": "brief_aus_kontext",
+                "data": raw_data.get("brief_text"),
+                "schreiben_typ": raw_data.get("schreiben_typ"),
                 "query_used": tool_name,
             }
 

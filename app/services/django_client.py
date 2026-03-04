@@ -24,9 +24,13 @@ class DjangoClient:
         """Generic POST request handler"""
         url = f"{self.base_url}/api/ai/{endpoint}"
         
+        from app.services.hmac_auth import generate_ki_signature
+        req_headers = self.headers.copy()
+        req_headers["X-KI-Signature"] = generate_ki_signature()
+        
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             try:
-                response = await client.post(url, json=data, headers=self.headers)
+                response = await client.post(url, json=data, headers=req_headers)
                 response.raise_for_status()
                 return response.json()
             except httpx.HTTPStatusError as e:
@@ -86,8 +90,11 @@ class DjangoClient:
             'titel': titel
         }
         
+        
         # Don't set Content-Type header manually for multipart
         headers = {k: v for k, v in self.headers.items() if k != 'Content-Type'}
+        from app.services.hmac_auth import generate_ki_signature
+        headers["X-KI-Signature"] = generate_ki_signature()
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             try:
