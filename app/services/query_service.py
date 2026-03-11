@@ -315,7 +315,9 @@ class QueryService:
         if not self.gemini_api_key:
             return {"status": "error", "error": "Gemini API Key nicht konfiguriert."}
 
-        logger.info(f"QueryService: Verarbeite Anfrage von User {user_id}: '{query[:80]}'")
+        # cast for pyre
+        safe_query = str(query) if query else ""
+        logger.info(f"QueryService: Verarbeite Anfrage von User {user_id}: '{safe_query[:80]}'")
 
         # 1. Gemini Function Calling → Tool + Parameter bestimmen
         function_call = await self._classify_with_gemini(query)
@@ -324,7 +326,7 @@ class QueryService:
             logger.info("Kein Tool gewählt -> Fallback auf System-Wissen RAG")
             return await self._handle_rag_fallback(query)
 
-        tool_name = function_call.get("name")
+        tool_name = str(function_call.get("name", ""))
         tool_args = function_call.get("args", {})
         logger.info(f"Gemini wählte Tool: {tool_name}, Args: {tool_args}")
 
@@ -497,6 +499,7 @@ class QueryService:
                 # Empfänger und Notizen optional durchschleifen, wenn sie im Request sind
                 empfaenger = args.pop('empfaenger', 'versicherung')
                 notizen = args.pop('notizen', '')
+                # type: ignore (Pyre2: Typensignatur von handler ist dynamisch)
                 return await handler(
                     user_kontext=args.get('user_kontext', ''),
                     schreiben_typ=args.get('schreiben_typ'),
@@ -504,7 +507,7 @@ class QueryService:
                     empfaenger=empfaenger,
                     notizen=notizen
                 )
-            return await handler(**args)
+            return await handler(**args)  # type: ignore
         except Exception as e:
             logger.error(f"Tool-Ausführung fehlgeschlagen ({tool_name}): {e}")
             return None
@@ -892,6 +895,282 @@ class QueryService:
             "data": str(raw_data),
             "query_used": tool_name,
         }
+
+    # -----------------------------------------------------------------------
+    # LOKI CHAT — Multi-Turn Function Calling
+    # -----------------------------------------------------------------------
+
+    async def _execute_chat_tool(self, tool_name: str, args: dict) -> dict:
+        from app.services.hmac_auth import generate_ki_signature
+        headers = {"X-KI-Signature": generate_ki_signature()}
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            if tool_name == "get_finanzdaten":
+                resp = await client.get(
+                    f"{self.django_base}/api/ai/query/finanzdaten/",
+                    params={"akte_id": args["akte_id"]},
+                    headers=headers
+                )
+                return resp.json()
+
+            elif tool_name == "erstelle_aufgabe":
+                resp = await client.post(
+                    f"{self.django_base}/api/ai/actions/erstelle_aufgabe/",
+                    json=args, headers=headers
+                )
+                return resp.json()
+
+            elif tool_name == "aendere_aktenstatus":
+                resp = await client.post(
+                    f"{self.django_base}/api/ai/actions/aendere_aktenstatus/",
+                    json=args, headers=headers
+                )
+                return resp.json()
+
+            elif tool_name == "berechne_rvg":
+                resp = await client.post(
+                    f"{self.django_base}/api/ai/actions/berechne_rvg/",
+                    json=args, headers=headers
+                )
+                return resp.json()
+
+            elif tool_name == "erstelle_brief":
+                # Brief-Generierung über bestehenden orchestrator-Endpoint
+                resp = await client.post(
+                    f"{self.django_base}/api/orchestrator/draft/",
+                    json={
+                        "akte_id": args["akte_id"],
+                        "empfaenger": args["empfaenger"],
+                        "notizen": args.get("hinweise", ""),
+                    },
+                    headers=headers
+                )
+                draft_data = resp.json()
+                # Brief speichern
+                save_resp = await client.post(
+                    f"{self.django_base}/api/orchestrator/draft/save/",
+                    json={
+                        "akte_id": args["akte_id"],
+                        "draft_text": draft_data.get("draft_text", ""),
+                        "betreff": args.get("betreff", ""),
+                        "empfaenger": args["empfaenger"],
+                    },
+                    headers=headers
+                )
+                return save_resp.json()
+
+        return {"error": f"Unbekanntes Tool: {tool_name}"}
+
+    async def handle_akte_chat(
+        self,
+        akte_id: int,
+        messages: list[dict],
+        kontext: dict,
+    ) -> dict:
+        from app.main import get_gemini_client
+        gemini = get_gemini_client()
+        if not gemini:
+            return {"reply": "Gemini API nicht bereit", "actions_taken": []}
+
+        # Finanzdaten lesbar formatieren
+        finanzdaten_raw = kontext.get('finanzdaten', [])
+        if finanzdaten_raw:
+            gesamt_soll = sum(p.get('soll', 0) for p in finanzdaten_raw)
+            gesamt_haben = sum(p.get('haben', 0) for p in finanzdaten_raw)
+            fd_lines = []
+            for p in finanzdaten_raw:
+                cat = p.get('category', '–')
+                beschr = p.get('beschreibung', '–')
+                soll = p.get('soll', 0)
+                haben = p.get('haben', 0)
+                st = p.get('status', '–')
+                fd_lines.append(f"  [{cat}] {beschr}: Forderung={soll:.2f}€, Erhalten={haben:.2f}€, Status={st}")
+            fd_lines.append(f"  → GESAMT: Forderung={gesamt_soll:.2f}€, Erhalten={gesamt_haben:.2f}€, Noch offen={gesamt_soll - gesamt_haben:.2f}€")
+            finanzdaten_text = "\n".join(fd_lines)
+        else:
+            finanzdaten_text = "Keine Finanzdaten vorhanden."
+
+        # Aufgaben lesbar formatieren
+        aufgaben_raw = kontext.get('aufgaben', [])
+        aufgaben_text = "\n".join(
+            f"  - {a.get('titel', '?')} (Status: {a.get('status', '?')}, Fällig: {a.get('faellig_am', 'k.A.')})"
+            for a in aufgaben_raw
+        ) if aufgaben_raw else "Keine offenen Aufgaben."
+
+        # Fristen lesbar formatieren
+        fristen_raw = kontext.get('fristen', [])
+        fristen_text = "\n".join(
+            f"  - {f.get('bezeichnung', '?')} am {f.get('frist_datum', '?')} [Priorität: {f.get('prioritaet', '?')}, Erledigt: {f.get('erledigt', False)}]"
+            for f in fristen_raw
+        ) if fristen_raw else "Keine Fristen vorhanden."
+
+        system_prompt = f"""Du bist Loki, der KI-Assistent der Kanzlei AWR24. Du hast VOLLSTÄNDIGEN Zugriff auf folgende Akte:
+
+AKTE-ID (für Tool-Aufrufe): {akte_id}
+AKTENZEICHEN: {kontext.get('aktenzeichen', '')}
+MANDANT: {kontext.get('mandant', '')}
+GEGNER/VERSICHERUNG: {kontext.get('gegner', '')}
+ZIEL/MANDAT: {kontext.get('ziel', 'Nicht angegeben')}
+STATUS: {kontext.get('status', '')}
+
+FINANZDATEN (bereits vollständig geladen):
+{finanzdaten_text}
+
+OFFENE AUFGABEN:
+{aufgaben_text}
+
+FRISTEN:
+{fristen_text}
+
+FRAGEBOGEN-DATEN:
+{kontext.get('fragebogen', {})}
+
+WICHTIGE REGELN:
+- Die AKTE-ID für alle Tool-Aufrufe ist: {akte_id} — verwende sie DIREKT, frage den User NIEMALS danach.
+- Du hast ALLE Finanzdaten und Aufgaben oben vollständig — nutze sie direkt aus dem Kontext.
+- Frage NIEMALS nach Daten, die bereits im obigen Kontext stehen.
+- Bevor du eine Aktion ausführst (Aufgabe erstellen, Status ändern, Brief erstellen),
+  kündige sie im Chat an und warte auf Bestätigung ("Ja", "Ok", "Mach das" etc.).
+- Führe Aktionen NUR aus wenn der User explizit zustimmt.
+- Antworte immer auf Deutsch, präzise und kanzlei-professionell.
+- Wenn der User einen Brief mit RVG-Gebühren anfordert:
+  1. Prüfe ob die FINANZDATEN oben bereits RVG-Positionen enthalten.
+  2. Falls KEINE RVG-Positionen vorhanden: Nutze das Tool `berechne_rvg` um sie zu berechnen.
+  3. Danach erstelle den Brief mit `erstelle_brief` und erwähne die berechneten Gebühren.
+- Die RVG-Gebühren werden AUTOMATISCH aus dem Gegenstandswert der Akte berechnet — du brauchst den User NICHT danach zu fragen.
+"""
+
+        import google.ai.generativelanguage as gl
+        
+        tools = [
+            {
+                "function_declarations": [
+                    {
+                        "name": "get_finanzdaten",
+                        "description": "Aktuelle Zahlungspositionen und Finanzdaten der Akte abrufen",
+                        "parameters": {
+                            "type": gl.Type.OBJECT,
+                            "properties": {
+                                "akte_id": {"type": gl.Type.INTEGER, "description": "Die Akte-ID"}
+                            },
+                            "required": ["akte_id"]
+                        }
+                    },
+                    {
+                        "name": "erstelle_aufgabe",
+                        "description": "Eine neue Aufgabe für die Akte erstellen",
+                        "parameters": {
+                            "type": gl.Type.OBJECT,
+                            "properties": {
+                                "akte_id": {"type": gl.Type.INTEGER},
+                                "titel": {"type": gl.Type.STRING, "description": "Titel der Aufgabe"},
+                                "beschreibung": {"type": gl.Type.STRING, "description": "Beschreibung (optional)"},
+                                "prioritaet": {"type": gl.Type.STRING, "enum": ["hoch", "mittel", "niedrig"]},
+                                "faellig_am": {"type": gl.Type.STRING, "description": "Fälligkeitsdatum ISO-Format YYYY-MM-DD (optional)"}
+                            },
+                            "required": ["akte_id", "titel"]
+                        }
+                    },
+                    {
+                        "name": "aendere_aktenstatus",
+                        "description": "Den Status der Akte ändern (z.B. auf Geschlossen setzen)",
+                        "parameters": {
+                            "type": gl.Type.OBJECT,
+                            "properties": {
+                                "akte_id": {"type": gl.Type.INTEGER},
+                                "neuer_status": {"type": gl.Type.STRING, "enum": ["Offen", "Geschlossen", "Archiviert"]}
+                            },
+                            "required": ["akte_id", "neuer_status"]
+                        }
+                    },
+                    {
+                        "name": "berechne_rvg",
+                        "description": "RVG-Gebühren für die Akte automatisch berechnen und als Zahlungspositionen speichern. Nutze dies wenn der User einen Brief mit RVG-Gebühren anfordert und die Finanzdaten noch keine RVG-Positionen enthalten.",
+                        "parameters": {
+                            "type": gl.Type.OBJECT,
+                            "properties": {
+                                "akte_id": {"type": gl.Type.INTEGER, "description": "Die Akte-ID"}
+                            },
+                            "required": ["akte_id"]
+                        }
+                    },
+                    {
+                        "name": "erstelle_brief",
+                        "description": "Einen Brief für die Akte erstellen und speichern",
+                        "parameters": {
+                            "type": gl.Type.OBJECT,
+                            "properties": {
+                                "akte_id": {"type": gl.Type.INTEGER},
+                                "empfaenger": {"type": gl.Type.STRING, "enum": ["versicherung", "mandant"]},
+                                "betreff": {"type": gl.Type.STRING},
+                                "hinweise": {"type": gl.Type.STRING, "description": "Inhaltliche Hinweise für den Brief"}
+                            },
+                            "required": ["akte_id", "empfaenger", "betreff"]
+                        }
+                    }
+                ]
+            }
+        ]
+
+        contents = []
+        for msg in messages:
+            role = "user" if msg["role"] == "user" else "model"
+            contents.append({"role": role, "parts": [{"text": msg["content"]}]})
+
+        import google.generativeai as genai
+        from app.config import settings
+        
+        chat_model = genai.GenerativeModel(
+            model_name=settings.gemini_model,
+            tools=tools,
+        )
+        
+        # System instruction als Teil der Conversation anhängen
+        contents.insert(0, {"role": "user", "parts": [{"text": "SYSTEM INSTRUCTION: " + system_prompt}]})
+        contents.insert(1, {"role": "model", "parts": [{"text": "Verstanden, ich werde diese Anweisungen befolgen."}]}) 
+
+        # Gemini aufrufen mit Function Calling
+        try:
+            response = await chat_model.generate_content_async(contents)
+        except Exception as e:
+            err_str = str(e)
+            if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
+                return {
+                    "reply": "⏳ Gemini API Tageslimit erreicht. Bitte in einigen Minuten erneut versuchen.",
+                    "actions_taken": []
+                }
+            raise
+
+        actions_taken = []
+        while response.candidates and response.candidates[0].content.parts and getattr(response.candidates[0].content.parts[0], 'function_call', None):
+            fc = response.candidates[0].content.parts[0].function_call
+            try:
+                fc_args_dict = {k: v for k, v in fc.args.items()}
+            except Exception:
+                fc_args_dict = dict(fc.args)
+
+            tool_result = await self._execute_chat_tool(fc.name, fc_args_dict)
+            actions_taken.append({"tool": fc.name, "result": tool_result})
+
+            # Tool-Ergebnis zurück an Gemini
+            contents.append(response.candidates[0].content)
+            contents.append({
+                "role": "user",
+                "parts": [{"function_response": {"name": fc.name, "response": tool_result}}]
+            })
+            try:
+                response = await chat_model.generate_content_async(contents)
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
+                    return {
+                        "reply": "⏳ Gemini API Tageslimit erreicht. Bitte in einigen Minuten erneut versuchen.",
+                        "actions_taken": actions_taken
+                    }
+                raise
+
+        reply_text = response.text if response.candidates else "Keine Antwort von KI."
+        return {"reply": reply_text, "actions_taken": actions_taken}
 
 
 # Singleton

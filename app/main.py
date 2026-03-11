@@ -1,7 +1,7 @@
 """
 FastAPI Main Application — Kanzlei AI Service
 """
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, BackgroundTasks, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Any
@@ -1127,6 +1127,34 @@ async def handle_query(request: QueryRequest):
             status_code=500,
             detail=f"Query-Verarbeitung fehlgeschlagen: {str(e)}"
         )
+
+
+@app.post("/api/chat/", dependencies=[Depends(verify_hmac)])
+async def akte_chat(request: Request):
+    """
+    Loki Dialog-Chat (Task CHAT-G1).
+    Erwartet { "akte_id": ..., "messages": [...], "kontext": {...} }
+    """
+    try:
+        body = await request.json()
+        akte_id = body.get("akte_id")
+        messages = body.get("messages", [])
+        kontext = body.get("kontext", {})
+        
+        if not akte_id:
+            raise HTTPException(status_code=400, detail="akte_id fehlt")
+            
+        result = await query_service.handle_akte_chat(
+            akte_id=akte_id,
+            messages=messages,
+            kontext=kontext
+        )
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Fehler in /api/chat/: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Chat fehlgeschlagen: {str(e)}")
 
 
 if __name__ == "__main__":
