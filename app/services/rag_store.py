@@ -480,6 +480,73 @@ class RAGStore:
             logger.error(f"Fehler beim Lesen der RAG Stats: {e}")
             return {"status": "error", "error": str(e), "document_count": 0, "categories": {}, "saturation_percent": 0.0}
 
+    def get_health(self) -> Dict[str, Any]:
+        """
+        Gibt den Gesundheitszustand aller 3 ChromaDB-Collections zurück.
+        Wird vom RAG-Dashboard als Übersicht angezeigt.
+        """
+        collections_info = []
+        total_chunks = 0
+
+        def _collection_stats(collection, id_field: str = "document_id") -> Dict:
+            if not collection:
+                return {"chunk_count": 0, "document_count": 0}
+            count = collection.count()
+            data = collection.get(include=["metadatas"])
+            metadatas_list = data.get("metadatas") or []
+            unique_docs = len(set(
+                m.get(id_field, "") for m in metadatas_list if m and m.get(id_field)
+            ))
+            return {"chunk_count": count, "document_count": unique_docs}
+
+        # 1. kanzlei_wissen (Goldstandard-Schreiben, manuell)
+        kw = _collection_stats(self._collection, "document_id")
+        total_chunks += kw["chunk_count"]
+        collections_info.append({
+            "name": "kanzlei_wissen",
+            "label": "Goldstandard-Schreiben",
+            "description": "Manuell kuratierte Referenzschreiben für die KI",
+            **kw,
+        })
+
+        # 2. system_wissen (Programm-Dokumentation)
+        sw = _collection_stats(self._system_collection, "document_id")
+        total_chunks += sw["chunk_count"]
+        collections_info.append({
+            "name": "system_wissen",
+            "label": "System-Wissen",
+            "description": "Kanzlei-Programm-Dokumentation und Prozesse",
+            **sw,
+        })
+
+        # 3. akte_dokumente (auto-indexiert)
+        ad = _collection_stats(self._akte_collection, "dokument_id")
+        total_chunks += ad["chunk_count"]
+        # Anzahl eindeutiger Akten zusätzlich ermitteln
+        akte_count = 0
+        if self._akte_collection:
+            try:
+                data = self._akte_collection.get(include=["metadatas"]) or {}
+                akte_count = len(set(
+                    m.get("akte_id", "") for m in (data.get("metadatas") or []) if m and m.get("akte_id")
+                ))
+            except Exception:
+                pass
+        collections_info.append({
+            "name": "akte_dokumente",
+            "label": "Akte-Dokumente",
+            "description": "Automatisch indexierte Dokumente aus allen Akten",
+            "chunk_count": ad["chunk_count"],
+            "document_count": ad["document_count"],
+            "akte_count": akte_count,
+        })
+
+        return {
+            "status": "ok",
+            "total_chunks": total_chunks,
+            "collections": collections_info,
+        }
+
     def delete_document(self, document_id: str) -> bool:
         """
         Löscht alle Chunks (aus dem Vektor-Store), die zu einer bestimmten document_id gehören.

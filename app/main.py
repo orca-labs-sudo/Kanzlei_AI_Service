@@ -713,6 +713,17 @@ async def rag_get_indexed_ids(akte_id: int | None = None):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/rag/health", dependencies=[Depends(verify_hmac)])
+async def rag_get_health():
+    """Gibt den Gesundheitszustand aller 3 ChromaDB-Collections zurück."""
+    try:
+        from app.services.rag_store import rag_store
+        return rag_store.get_health()
+    except Exception as e:
+        logger.error(f"Fehler in rag_health: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/rag/stats", dependencies=[Depends(verify_hmac)])
 async def rag_get_stats():
     """
