@@ -9,8 +9,9 @@ from googleapiclient.discovery import build
 
 logger = logging.getLogger(__name__)
 
-# Constants
-DJANGO_CALENDAR_TOKEN_URL = "http://host.docker.internal:8001/api/core/google/calendar/token/"
+# Constants — BACKEND_URL aus Umgebungsvariable (Prod: http://backend:8000, Lokal: http://host.docker.internal:8001)
+_backend_url = os.getenv("BACKEND_URL", "http://host.docker.internal:8001").rstrip("/")
+DJANGO_CALENDAR_TOKEN_URL = f"{_backend_url}/api/core/google/calendar/token/"
 SCOPES = ['https://www.googleapis.com/auth/calendar.events']
 
 class GoogleCalendarClient:
