@@ -904,51 +904,81 @@ class QueryService:
         from app.services.hmac_auth import generate_ki_signature
         headers = {"X-KI-Signature": generate_ki_signature()}
 
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            if tool_name == "get_finanzdaten":
-                resp = await client.get(
-                    f"{self.django_base}/api/ai/query/finanzdaten/",
-                    params={"akte_id": args["akte_id"]},
-                    headers=headers
-                )
+        def _safe_json(resp) -> dict:
+            """Gibt resp.json() zurück oder einen Fehler-Dict bei HTTP-Fehler / Parse-Fehler."""
+            try:
+                resp.raise_for_status()
                 return resp.json()
+            except httpx.HTTPStatusError as e:
+                logger.error(f"_execute_chat_tool HTTP {e.response.status_code} für {tool_name}: {e.response.text[:200]}")
+                return {"error": f"Backend-Fehler {e.response.status_code}"}
+            except Exception as e:
+                logger.error(f"_execute_chat_tool JSON-Parse-Fehler für {tool_name}: {e}")
+                return {"error": "Unerwartete Backend-Antwort"}
 
-            elif tool_name == "erstelle_aufgabe":
-                resp = await client.post(
-                    f"{self.django_base}/api/ai/actions/erstelle_aufgabe/",
-                    json=args, headers=headers
-                )
-                return resp.json()
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                if tool_name == "get_finanzdaten":
+                    resp = await client.get(
+                        f"{self.django_base}/api/ai/query/finanzdaten/",
+                        params={"akte_id": args["akte_id"]},
+                        headers=headers
+                    )
+                    return _safe_json(resp)
 
-            elif tool_name == "aendere_aktenstatus":
-                resp = await client.post(
-                    f"{self.django_base}/api/ai/actions/aendere_aktenstatus/",
-                    json=args, headers=headers
-                )
-                return resp.json()
+                elif tool_name == "erstelle_aufgabe":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/erstelle_aufgabe/",
+                        json=args, headers=headers
+                    )
+                    return _safe_json(resp)
 
-            elif tool_name == "berechne_rvg":
-                resp = await client.post(
-                    f"{self.django_base}/api/ai/actions/berechne_rvg/",
-                    json=args, headers=headers
-                )
-                return resp.json()
+                elif tool_name == "aendere_aktenstatus":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/aendere_aktenstatus/",
+                        json=args, headers=headers
+                    )
+                    return _safe_json(resp)
 
-            elif tool_name == "erstelle_brief":
-                # Brief speichern — Gemini hat den Text bereits im Tool-Call generiert
-                resp = await client.post(
-                    f"{self.django_base}/api/ai/actions/erstelle_brief/",
-                    json={
-                        "akte_id": args["akte_id"],
-                        "brief_text": args.get("brief_text", ""),
-                        "betreff": args.get("betreff", ""),
-                        "empfaenger": args.get("empfaenger", "versicherung"),
-                    },
-                    headers=headers
-                )
-                return resp.json()
+                elif tool_name == "berechne_rvg":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/berechne_rvg/",
+                        json=args, headers=headers
+                    )
+                    return _safe_json(resp)
 
-        return {"error": f"Unbekanntes Tool: {tool_name}"}
+                elif tool_name == "erstelle_brief":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/erstelle_brief/",
+                        json={
+                            "akte_id": args["akte_id"],
+                            "brief_text": args.get("brief_text", ""),
+                            "betreff": args.get("betreff", ""),
+                            "empfaenger": args.get("empfaenger", "versicherung"),
+                        },
+                        headers=headers
+                    )
+                    return _safe_json(resp)
+
+                elif tool_name == "erstelle_zahlungspositionen":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/erstelle_zahlungspositionen/",
+                        json={
+                            "akte_id": args["akte_id"],
+                            "positionen": args.get("positionen", []),
+                        },
+                        headers=headers
+                    )
+                    return _safe_json(resp)
+
+            return {"error": f"Unbekanntes Tool: {tool_name}"}
+
+        except httpx.TimeoutException:
+            logger.error(f"_execute_chat_tool Timeout bei Tool: {tool_name}")
+            return {"error": f"Timeout bei Ausführung von '{tool_name}' — Backend nicht erreichbar."}
+        except Exception as e:
+            logger.error(f"_execute_chat_tool unerwarteter Fehler ({tool_name}): {e}", exc_info=True)
+            return {"error": f"Interner Fehler bei '{tool_name}': {str(e)}"}
 
     async def handle_akte_chat(
         self,
@@ -1104,10 +1134,34 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                             "properties": {
                                 "akte_id": {"type": gl.Type.INTEGER},
                                 "empfaenger": {"type": gl.Type.STRING, "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
-                                "betreff": {"type": gl.Type.STRING, "description": "Betreffzeile des Briefes (z.B. 'Schadensregulierung – Ihr Zeichen: ...')"},
+                                "betreff": {"type": gl.Type.STRING, "description": "Betreffzeile des Briefes. NUR das Thema, z.B. 'Schadensregulierung – Unfall vom 10.03.2026' oder 'Sachstandsinformation'. KEIN 'Unser Zeichen' und KEIN Aktenzeichen — das wird vom Template automatisch als eigenes Feld eingefügt."},
                                 "brief_text": {"type": gl.Type.STRING, "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'). Diese Teile werden automatisch aus der Vorlage ergänzt."}
                             },
                             "required": ["akte_id", "empfaenger", "betreff", "brief_text"]
+                        }
+                    },
+                    {
+                        "name": "erstelle_zahlungspositionen",
+                        "description": "Zahlungspositionen (Forderungen) in den Finanzen der Akte anlegen. Nutze dies wenn der User Beträge eintragen möchte, z.B. Gutachten, Kostenpauschale, Reparaturkosten, Sachverständigengebühren.",
+                        "parameters": {
+                            "type": gl.Type.OBJECT,
+                            "properties": {
+                                "akte_id": {"type": gl.Type.INTEGER},
+                                "positionen": {
+                                    "type": gl.Type.ARRAY,
+                                    "items": {
+                                        "type": gl.Type.OBJECT,
+                                        "properties": {
+                                            "beschreibung": {"type": gl.Type.STRING, "description": "Bezeichnung der Position, z.B. 'Kostenpauschale', 'Schadensgutachten (netto)'"},
+                                            "soll_betrag": {"type": gl.Type.NUMBER, "description": "Betrag in Euro (Forderung)"},
+                                            "category": {"type": gl.Type.STRING, "description": "Kategorie: Gutachten | SV-Kosten | Reparatur | Mietfahrzeug | Schmerzensgeld | Kostenpauschale | RVG | Sonstiges"}
+                                        },
+                                        "required": ["beschreibung", "soll_betrag", "category"]
+                                    },
+                                    "description": "Liste der anzulegenden Zahlungspositionen"
+                                }
+                            },
+                            "required": ["akte_id", "positionen"]
                         }
                     }
                 ]
@@ -1175,7 +1229,11 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                     }
                 raise
 
-        reply_text = response.text if response.candidates else "Keine Antwort von KI."
+        try:
+            reply_text = response.text if response.candidates else "Keine Antwort von KI."
+        except ValueError:
+            # Gemini hat keine Text-Antwort (z.B. nur unaufgelöste Function Calls)
+            reply_text = "Die Anfrage konnte nicht verarbeitet werden. Bitte formuliere sie anders oder nutze eine der verfügbaren Aktionen."
         return {"reply": reply_text, "actions_taken": actions_taken}
 
 
