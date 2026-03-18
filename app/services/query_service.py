@@ -1023,6 +1023,16 @@ class QueryService:
             for f in fristen_raw
         ) if fristen_raw else "Keine Fristen vorhanden."
 
+        # Dokumente lesbar formatieren
+        dokumente_raw = kontext.get('dokumente', [])
+        dokumente_text = "\n".join(
+            f"  - [{d.get('kategorie', '–')}] {d.get('titel', '?')} (Datum: {d.get('datum', 'k.A.')})"
+            for d in dokumente_raw
+        ) if dokumente_raw else "Keine Dokumente vorhanden."
+
+        # Gegenstandswert aus Finanzdaten berechnen (Summe aller Soll-Beträge)
+        gegenstandswert = sum(p.get('soll', 0) for p in finanzdaten_raw)
+
         system_prompt = f"""Du bist Loki, der KI-Assistent der Kanzlei AWR24. Du hast VOLLSTÄNDIGEN Zugriff auf folgende Akte:
 
 AKTE-ID (für Tool-Aufrufe): {akte_id}
@@ -1031,9 +1041,13 @@ MANDANT: {kontext.get('mandant', '')}
 GEGNER/VERSICHERUNG: {kontext.get('gegner', '')}
 ZIEL/MANDAT: {kontext.get('ziel', 'Nicht angegeben')}
 STATUS: {kontext.get('status', '')}
+GEGENSTANDSWERT (Summe Soll-Beträge Finanzen): {gegenstandswert:.2f} €
 
 FINANZDATEN (bereits vollständig geladen):
 {finanzdaten_text}
+
+DOKUMENTE IN DER AKTE:
+{dokumente_text}
 
 OFFENE AUFGABEN:
 {aufgaben_text}
@@ -1046,8 +1060,9 @@ FRAGEBOGEN-DATEN:
 
 WICHTIGE REGELN:
 - Die AKTE-ID für alle Tool-Aufrufe ist: {akte_id} — verwende sie DIREKT, frage den User NIEMALS danach.
-- Du hast ALLE Finanzdaten und Aufgaben oben vollständig — nutze sie direkt aus dem Kontext.
+- Du hast ALLE Finanzdaten, Dokumente und Aufgaben oben vollständig — nutze sie direkt aus dem Kontext.
 - Frage NIEMALS nach Daten, die bereits im obigen Kontext stehen.
+- GEGENSTANDSWERT für RVG = Summe der Soll-Beträge in den Finanzdaten (oben ausgewiesen). Wenn dieser Wert 0 oder sehr niedrig ist (z.B. nur Kostenpauschale), weise den User darauf hin, dass zuerst die Schadenspositionen (Reparatur, Gutachten etc.) eingetragen werden sollten, bevor RVG sinnvoll berechnet werden kann.
 - Antworte immer auf Deutsch, präzise und kanzlei-professionell.
 
 BRIEFE — ZWEISTUFIGER ABLAUF (PFLICHT):
