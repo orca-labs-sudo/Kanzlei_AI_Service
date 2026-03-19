@@ -1084,7 +1084,9 @@ Schritt 2 — Speichern nach Bestätigung:
 - Die RVG-Gebühren werden AUTOMATISCH aus dem Gegenstandswert der Akte berechnet — frage NICHT danach.
 
 ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
-- Kündige diese im Chat an und warte auf Bestätigung ("Ja", "Ok", "Mach das" etc.).
+- AUFGABE ERSTELLEN: Rufe `erstelle_aufgabe` SOFORT auf wenn der User eine Aufgabe erstellen möchte — kein Bestätigungsschritt notwendig. Falls der User kein Datum nennt, frage zuerst "Bis wann?" und warte auf die Antwort, bevor du das Tool aufrufst.
+- STATUS ÄNDERN: Kündige an und warte auf Bestätigung ("Ja", "Ok", "Mach das" etc.), bevor du `aendere_aktenstatus` aufrufst.
+- WICHTIG: Rufe Tools TATSÄCHLICH auf — antworte NIEMALS nur mit Text "Aufgabe erstellt" oder "Status geändert" ohne den entsprechenden Tool-Aufruf durchzuführen!
 """
 
         import google.ai.generativelanguage as gl
@@ -1113,9 +1115,9 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                                 "titel": {"type": gl.Type.STRING, "description": "Titel der Aufgabe"},
                                 "beschreibung": {"type": gl.Type.STRING, "description": "Beschreibung (optional)"},
                                 "prioritaet": {"type": gl.Type.STRING, "enum": ["hoch", "mittel", "niedrig"]},
-                                "faellig_am": {"type": gl.Type.STRING, "description": "Fälligkeitsdatum ISO-Format YYYY-MM-DD (optional)"}
+                                "faellig_am": {"type": gl.Type.STRING, "description": "Fälligkeitsdatum ISO-Format YYYY-MM-DD — PFLICHT. Falls der User kein Datum nennt, frage erst danach bevor du das Tool aufrufst."}
                             },
-                            "required": ["akte_id", "titel"]
+                            "required": ["akte_id", "titel", "faellig_am"]
                         }
                     },
                     {
