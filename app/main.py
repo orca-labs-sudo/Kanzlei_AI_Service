@@ -944,8 +944,9 @@ async def process_email_background_task(job_id: str, email_content_bytes: bytes,
         }
         mandant_resp = await django_client.create_mandant(mandant_payload)
         mandant_id = mandant_resp['mandant_id']
-        logger.info(f"Job {job_id}: Created Mandant {mandant_id}")
-        job_tracker.update_step(job_id, 'mandant_creation', 'completed', 'Mandant erstellt')
+        mandant_name = mandant_resp.get('name') or f"{case_data.mandant.vorname} {case_data.mandant.nachname}".strip()
+        logger.info(f"Job {job_id}: Created Mandant {mandant_id} ({mandant_name})")
+        job_tracker.update_step(job_id, 'mandant_creation', 'completed', mandant_name)
         job_tracker.update_step(job_id, 'akte_creation', 'processing', 'Akte wird erstellt...')
 
         # 4. Lookup/Create Gegner
@@ -1042,7 +1043,7 @@ async def process_email_background_task(job_id: str, email_content_bytes: bytes,
                 except Exception as e:
                     logger.warning(f"Job {job_id}: Zahlungspositionen Auto-Fill fehlgeschlagen: {e}")
 
-        job_tracker.update_step(job_id, 'akte_creation', 'completed', 'Akte erstellt')
+        job_tracker.update_step(job_id, 'akte_creation', 'completed', aktenzeichen or 'Akte erstellt')
         job_tracker.update_step(job_id, 'document_upload', 'processing', 'Dokumente werden hochgeladen...')
 
         # 6. Upload Original Email
