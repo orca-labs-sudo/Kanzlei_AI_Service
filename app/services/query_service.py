@@ -933,6 +933,13 @@ class QueryService:
                     )
                     return _safe_json(resp)
 
+                elif tool_name == "erstelle_frist":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/erstelle_frist/",
+                        json=args, headers=headers
+                    )
+                    return _safe_json(resp)
+
                 elif tool_name == "aendere_aktenstatus":
                     resp = await client.post(
                         f"{self.django_base}/api/ai/actions/aendere_aktenstatus/",
@@ -1116,6 +1123,20 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                                 "faellig_am": {"type": "STRING", "description": "Fälligkeitsdatum ISO-Format YYYY-MM-DD — PFLICHT. Falls der User kein Datum nennt, frage erst danach bevor du das Tool aufrufst."}
                             },
                             "required": ["akte_id", "titel", "faellig_am"]
+                        }
+                    },
+                    {
+                        "name": "erstelle_frist",
+                        "description": "Eine neue Frist (Deadline) für die Akte eintragen. Nutze dies IMMER, wenn der User explizit eine Frist, Deadline oder ähnliches setzen möchte.",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "akte_id": {"type": "INTEGER"},
+                                "bezeichnung": {"type": "STRING", "description": "Bezeichnung der Frist, z.B. 'Widerspruchsfrist', 'Frist zur Stellungnahme'"},
+                                "frist_datum": {"type": "STRING", "description": "Datum der Frist im ISO-Format YYYY-MM-DD — PFLICHT. Falls der User kein Datum nennt, frage erst danach bevor du das Tool aufrufst."},
+                                "prioritaet": {"type": "STRING", "enum": ["hoch", "mittel", "niedrig"]}
+                            },
+                            "required": ["akte_id", "bezeichnung", "frist_datum"]
                         }
                     },
                     {
