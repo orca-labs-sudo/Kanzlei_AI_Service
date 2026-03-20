@@ -138,13 +138,18 @@ class EmailProcessor:
 
         for part in msg.walk():
             content_maintype = part.get_content_maintype()
+            content_type = part.get_content_type()
+            content_disposition = str(part.get('Content-Disposition', ''))
+            payload_len = len(part.get_payload(decode=True) or b'')
+            logger.info(
+                f"WALK: type={content_type} maintype={content_maintype} "
+                f"fname={part.get_filename()!r} cid={part.get('Content-ID','')!r} "
+                f"disp={content_disposition[:50]!r} bytes={payload_len}"
+            )
 
             # Container-Teile überspringen (walk() steigt selbst hinein)
             if content_maintype in ('multipart', 'message'):
                 continue
-
-            content_type = part.get_content_type()
-            content_disposition = str(part.get('Content-Disposition', ''))
 
             # Reine Body-Texte überspringen
             if content_type in ('text/plain', 'text/html') and 'attachment' not in content_disposition:
