@@ -949,11 +949,11 @@ async def process_email_background_task(
                 if extracted and len(extracted.strip()) >= 50:
                     text_parts.append(f"\n=== {label} ===\n{extracted.strip()}")
                     logger.info(f"Job {job_id}: Text extrahiert: {label} ({len(extracted)} Zeichen)")
-                else:
-                    # Fallback: als Vision-Input (z.B. Scan-PDF ohne erkennbaren Text)
-                    if mime == 'application/pdf':
-                        ai_attachments.append({"mime_type": mime, "data": content})
-                        logger.info(f"Job {job_id}: PDF als Vision-Input (kein Text): {label}")
+                # PDFs IMMER auch als Vision — pypdf extrahiert keinen Text aus
+                # eingebetteten Bildern (z.B. Fahrzeugschein-Scan im SV-Datenblatt)
+                if mime == 'application/pdf':
+                    ai_attachments.append({"mime_type": mime, "data": content})
+                    logger.info(f"Job {job_id}: PDF auch als Vision-Input: {label}")
 
         # 2a. In der E-Mail eingebettete Anhänge
         for att in email_content.attachments:

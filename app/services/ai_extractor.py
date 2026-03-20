@@ -179,12 +179,15 @@ class AIExtractor:
             Du bist ein juristischer Assistent. Analysiere die folgende E-Mail (inklusive Header, Signatur, Footer) UND die angehängten Bilder/Dokumente.
             Extrahiere strukturierte Daten für eine neue Verkehrsrecht-Akte.
             
-            WICHTIG: 
-            1. Suche aktiv nach Telefonnummern und E-Mail-Adressen des Mandanten.
-            2. Fahrzeuschein-Analyse (Scan/Foto): 
+            WICHTIG:
+            1. **Mandant-Daten aus ALLEN Quellen** — suche aktiv in:
+               - SV-Datenblättern: "Anspruchsteller" = Mandant (Name, Adresse, Tel, E-Mail)
+               - Vollmachten: "Vollmachtgeber" = Mandant (Name, Adresse)
+               - E-Mail-Signatur und Footer
+            2. Fahrzeugschein-Analyse (Scan/Foto):
                - Extrahiere Kennzeichen, Halter.
                - Extrahiere Technische Daten: Marke (D.1) und Modell/Handelsbezeichnung (D.3). Achtung: Feld J (Fahrzeugklasse) ist NICHT das Modell! Nennleistung in KW (P.2), Erstzulassung (B).
-            3. Suche nach Unfalldaten (Datum, Ort, Kennzeichen, Schadennummer).
+            3. Suche nach Unfalldaten (Datum, Ort, Kennzeichen, Schadennummer) — auch in WhatsApp-Chatverläufen.
             4. Achte auf MEHRERE Kennzeichen (z.B. Anhänger).
             5. **KRITISCH - Adressen-Trennung:**
                - "strasse" enthält NUR den Straßennamen (z.B. "Heideweg", "Musterstraße")
