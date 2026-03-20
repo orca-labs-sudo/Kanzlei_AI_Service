@@ -183,13 +183,19 @@ class AIExtractor:
             1. **Mandant-Daten aus ALLEN Quellen** — suche aktiv in:
                - SV-Datenblättern: "Anspruchsteller" = Mandant (Name, Adresse, Tel, E-Mail)
                - Vollmachten: "Vollmachtgeber" = Mandant (Name, Adresse)
+               - WhatsApp-Chatverläufen: der GESCHÄDIGTE / ANSPRUCHSTELLER = Mandant
                - E-Mail-Signatur und Footer
-            2. Fahrzeugschein-Analyse (Scan/Foto):
+            2. **WhatsApp-Chatverläufe (SCREENSHOTS)** — HÖCHSTE PRIORITÄT für Unfalldaten:
+               - Enthält oft: Datum, Uhrzeit, Unfallort, Kennzeichen, Fahrernamen
+               - UNFALLVERURSACHER / VERURSACHER = Gegner → kennzeichen_gegner
+               - GESCHÄDIGTER / ANSPRUCHSTELLER = Mandant → kennzeichen_mandant
+               - Extrahiere IMMER alle sichtbaren Kennzeichen aus solchen Screenshots!
+            3. Fahrzeugschein-Analyse (Scan/Foto):
                - Extrahiere Kennzeichen, Halter.
                - Extrahiere Technische Daten: Marke (D.1) und Modell/Handelsbezeichnung (D.3). Achtung: Feld J (Fahrzeugklasse) ist NICHT das Modell! Nennleistung in KW (P.2), Erstzulassung (B).
-            3. Suche nach Unfalldaten (Datum, Ort, Kennzeichen, Schadennummer) — auch in WhatsApp-Chatverläufen.
-            4. Achte auf MEHRERE Kennzeichen (z.B. Anhänger).
-            5. **KRITISCH - Adressen-Trennung:**
+            4. Suche nach Unfalldaten (Datum, Ort, Kennzeichen, Schadennummer) — in ALLEN Quellen.
+            5. Achte auf MEHRERE Kennzeichen (z.B. Anhänger).
+            6. **KRITISCH - Adressen-Trennung:**
                - "strasse" enthält NUR den Straßennamen (z.B. "Heideweg", "Musterstraße")
                - "hausnummer" enthält NUR die Hausnummer mit Zusätzen (z.B. "2 A", "15", "23b")
                - Beispiel: "Heideweg 2 A" → strasse: "Heideweg", hausnummer: "2 A"
