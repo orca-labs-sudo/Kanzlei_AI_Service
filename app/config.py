@@ -14,7 +14,7 @@ class Settings(BaseSettings):
 
     # Gemini Configuration
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash"  # Stand Feb 2026 — stable
+    gemini_model: str = "gemini-2.5-flash"  # Stand März 2026 — stabil, DSGVO-ready
 
     # Loki Configuration (Hybrid Two-Model Architecture)
     loki_url: str = "http://10.10.10.5:11434"

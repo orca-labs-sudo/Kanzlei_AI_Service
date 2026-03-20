@@ -5,7 +5,8 @@ Uses Gemini/Loki to extract structured data from text
 import json
 import logging
 from typing import Optional, Dict, Any
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 from pydantic import BaseModel
 from app.config import settings
 
@@ -81,15 +82,16 @@ def _clean_zero_strings(obj):
 
 class AIExtractor:
     def __init__(self):
-        self.configure_genai()
+        self.client = None
         self.model = None
+        self.configure_genai()
 
     def configure_genai(self):
         if settings.gemini_api_key:
             try:
                 logger.info(f"Configuring Gemini with key length: {len(settings.gemini_api_key)}")
-                genai.configure(api_key=settings.gemini_api_key)
-                self.model = genai.GenerativeModel(settings.gemini_model)
+                self.client = genai.Client(api_key=settings.gemini_api_key)
+                self.model = settings.gemini_model  # Modell-Name als String
                 logger.info(f"Gemini Model '{settings.gemini_model}' configured successfully")
             except Exception as e:
                 logger.error(f"Failed to configure Gemini: {str(e)}")
@@ -162,12 +164,12 @@ class AIExtractor:
         
         # Use Gemini (either configured or fallback)
         if settings.llm_provider == "gemini":
-            if not self.model:
-                logger.info("Model not ready, trying to configure again...")
+            if not self.client:
+                logger.info("Client not ready, trying to configure again...")
                 self.configure_genai()
 
-            if not self.model:
-                logger.warning("No AI model configured, returning empty structure")
+            if not self.client:
+                logger.warning("No AI client configured, returning empty structure")
                 return CaseData()
             
             if fallback_triggered:
@@ -247,14 +249,16 @@ class AIExtractor:
             
             if attachments:
                 for att in attachments:
-                    content_parts.append({
-                        "mime_type": att['mime_type'],
-                        "data": att['data']
-                    })
+                    content_parts.append(
+                        genai_types.Part.from_bytes(
+                            data=att['data'],
+                            mime_type=att['mime_type'],
+                        )
+                    )
                     logger.info(f"Added attachment to AI context: {att.get('mime_type')}")
 
             try:
-                response = self.model.generate_content(content_parts)
+                response = self.client.models.generate_content(model=self.model, contents=content_parts)
                 json_str = response.text.strip()
                 
                 # Clean up potential markdown formatting ```json ... ```
