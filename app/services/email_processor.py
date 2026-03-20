@@ -125,29 +125,51 @@ class EmailProcessor:
         return body
 
     def _get_attachments(self, msg: Message) -> List[EmailAttachment]:
-        """Extract attachments from EML.
+        """Robuste Anhang-Extraktion für Outlook .eml (AW:/FW: Mails).
 
-        Kein Content-Disposition-Check — Outlook-generierte .eml-Dateien
-        haben Anhänge oft ohne Content-Disposition-Header (nur Name in
-        Content-Type: name=...). Stattdessen: Body-Parts (text/plain,
-        text/html ohne attachment-Disposition) überspringen, alles andere
-        mit Dateinamen aufnehmen.
+        Verarbeitet alle Fälle:
+        - Content-Disposition: attachment; filename=...
+        - Content-Type: image/jpeg; name=...  (kein Content-Disposition)
+        - Content-ID: <image001.jpg@...>      (Inline-Bilder ohne filename)
+        - Verschachtelte message/rfc822       (Weiterleitungen)
         """
+        import mimetypes
         attachments = []
+
         for part in msg.walk():
-            if part.get_content_maintype() == 'multipart':
+            content_maintype = part.get_content_maintype()
+
+            # Container-Teile überspringen (walk() steigt selbst hinein)
+            if content_maintype in ('multipart', 'message'):
                 continue
 
             content_type = part.get_content_type()
             content_disposition = str(part.get('Content-Disposition', ''))
 
-            # Body-Teile überspringen (kein Anhang)
+            # Reine Body-Texte überspringen
             if content_type in ('text/plain', 'text/html') and 'attachment' not in content_disposition:
                 continue
 
+            # Dateiname ermitteln — mehrere Quellen versuchen
             filename = part.get_filename()
+
             if not filename:
-                continue
+                # Content-ID als Fallback (Outlook Inline-Bilder)
+                cid = str(part.get('Content-ID', '')).strip('<>')
+                if cid:
+                    base = cid.split('@')[0]
+                    ext = mimetypes.guess_extension(content_type) or ''
+                    if ext in ('.jpe', '.jpeg'):
+                        ext = '.jpg'
+                    filename = base if ('.' in base) else (base + ext)
+                elif content_maintype in ('image', 'application'):
+                    # Generischer Name als letzter Ausweg
+                    ext = mimetypes.guess_extension(content_type) or '.bin'
+                    if ext in ('.jpe', '.jpeg'):
+                        ext = '.jpg'
+                    filename = f"anhang_{len(attachments) + 1}{ext}"
+                else:
+                    continue
 
             content = part.get_payload(decode=True)
             if content:
@@ -157,6 +179,7 @@ class EmailProcessor:
                     content_type=content_type
                 ))
                 logger.info(f"Anhang gefunden: {filename} ({content_type}, {len(content)} Bytes)")
+
         return attachments
 
 email_processor = EmailProcessor()
