@@ -1089,8 +1089,6 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
 - WICHTIG: Rufe Tools TATSÄCHLICH auf — antworte NIEMALS nur mit Text "Aufgabe erstellt" oder "Status geändert" ohne den entsprechenden Tool-Aufruf durchzuführen!
 """
 
-        import google.ai.generativelanguage as gl
-        
         tools = [
             {
                 "function_declarations": [
@@ -1098,9 +1096,9 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                         "name": "get_finanzdaten",
                         "description": "Aktuelle Zahlungspositionen und Finanzdaten der Akte abrufen",
                         "parameters": {
-                            "type": gl.Type.OBJECT,
+                            "type": "OBJECT",
                             "properties": {
-                                "akte_id": {"type": gl.Type.INTEGER, "description": "Die Akte-ID"}
+                                "akte_id": {"type": "INTEGER", "description": "Die Akte-ID"}
                             },
                             "required": ["akte_id"]
                         }
@@ -1109,13 +1107,13 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                         "name": "erstelle_aufgabe",
                         "description": "Eine neue Aufgabe für die Akte erstellen",
                         "parameters": {
-                            "type": gl.Type.OBJECT,
+                            "type": "OBJECT",
                             "properties": {
-                                "akte_id": {"type": gl.Type.INTEGER},
-                                "titel": {"type": gl.Type.STRING, "description": "Titel der Aufgabe"},
-                                "beschreibung": {"type": gl.Type.STRING, "description": "Beschreibung (optional)"},
-                                "prioritaet": {"type": gl.Type.STRING, "enum": ["hoch", "mittel", "niedrig"]},
-                                "faellig_am": {"type": gl.Type.STRING, "description": "Fälligkeitsdatum ISO-Format YYYY-MM-DD — PFLICHT. Falls der User kein Datum nennt, frage erst danach bevor du das Tool aufrufst."}
+                                "akte_id": {"type": "INTEGER"},
+                                "titel": {"type": "STRING", "description": "Titel der Aufgabe"},
+                                "beschreibung": {"type": "STRING", "description": "Beschreibung (optional)"},
+                                "prioritaet": {"type": "STRING", "enum": ["hoch", "mittel", "niedrig"]},
+                                "faellig_am": {"type": "STRING", "description": "Fälligkeitsdatum ISO-Format YYYY-MM-DD — PFLICHT. Falls der User kein Datum nennt, frage erst danach bevor du das Tool aufrufst."}
                             },
                             "required": ["akte_id", "titel", "faellig_am"]
                         }
@@ -1124,10 +1122,10 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                         "name": "aendere_aktenstatus",
                         "description": "Den Status der Akte ändern (z.B. auf Geschlossen setzen)",
                         "parameters": {
-                            "type": gl.Type.OBJECT,
+                            "type": "OBJECT",
                             "properties": {
-                                "akte_id": {"type": gl.Type.INTEGER},
-                                "neuer_status": {"type": gl.Type.STRING, "enum": ["Offen", "Geschlossen", "Archiviert"]}
+                                "akte_id": {"type": "INTEGER"},
+                                "neuer_status": {"type": "STRING", "enum": ["Offen", "Geschlossen", "Archiviert"]}
                             },
                             "required": ["akte_id", "neuer_status"]
                         }
@@ -1136,9 +1134,9 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                         "name": "berechne_rvg",
                         "description": "RVG-Gebühren für die Akte automatisch berechnen und als Zahlungspositionen speichern. Nutze dies wenn der User einen Brief mit RVG-Gebühren anfordert und die Finanzdaten noch keine RVG-Positionen enthalten.",
                         "parameters": {
-                            "type": gl.Type.OBJECT,
+                            "type": "OBJECT",
                             "properties": {
-                                "akte_id": {"type": gl.Type.INTEGER, "description": "Die Akte-ID"}
+                                "akte_id": {"type": "INTEGER", "description": "Die Akte-ID"}
                             },
                             "required": ["akte_id"]
                         }
@@ -1147,12 +1145,12 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                         "name": "erstelle_brief",
                         "description": "Einen professionellen Brief für die Akte erstellen und als Dokument speichern. Du schreibst den vollständigen Brieftext selbst (nur Fließtext, kein Briefkopf, keine Anrede, kein 'Mit freundlichen Grüßen'). Briefkopf, Datum, Anrede und Signatur werden automatisch ergänzt.",
                         "parameters": {
-                            "type": gl.Type.OBJECT,
+                            "type": "OBJECT",
                             "properties": {
-                                "akte_id": {"type": gl.Type.INTEGER},
-                                "empfaenger": {"type": gl.Type.STRING, "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
-                                "betreff": {"type": gl.Type.STRING, "description": "Betreffzeile des Briefes. NUR das Thema, z.B. 'Schadensregulierung – Unfall vom 10.03.2026' oder 'Sachstandsinformation'. KEIN 'Unser Zeichen' und KEIN Aktenzeichen — das wird vom Template automatisch als eigenes Feld eingefügt."},
-                                "brief_text": {"type": gl.Type.STRING, "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'). Diese Teile werden automatisch aus der Vorlage ergänzt."}
+                                "akte_id": {"type": "INTEGER"},
+                                "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
+                                "betreff": {"type": "STRING", "description": "Betreffzeile des Briefes. NUR das Thema, z.B. 'Schadensregulierung – Unfall vom 10.03.2026' oder 'Sachstandsinformation'. KEIN 'Unser Zeichen' und KEIN Aktenzeichen — das wird vom Template automatisch als eigenes Feld eingefügt."},
+                                "brief_text": {"type": "STRING", "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'). Diese Teile werden automatisch aus der Vorlage ergänzt."}
                             },
                             "required": ["akte_id", "empfaenger", "betreff", "brief_text"]
                         }
@@ -1161,17 +1159,17 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                         "name": "erstelle_zahlungspositionen",
                         "description": "Zahlungspositionen (Forderungen) in den Finanzen der Akte anlegen. Nutze dies wenn der User Beträge eintragen möchte, z.B. Gutachten, Kostenpauschale, Reparaturkosten, Sachverständigengebühren.",
                         "parameters": {
-                            "type": gl.Type.OBJECT,
+                            "type": "OBJECT",
                             "properties": {
-                                "akte_id": {"type": gl.Type.INTEGER},
+                                "akte_id": {"type": "INTEGER"},
                                 "positionen": {
-                                    "type": gl.Type.ARRAY,
+                                    "type": "ARRAY",
                                     "items": {
-                                        "type": gl.Type.OBJECT,
+                                        "type": "OBJECT",
                                         "properties": {
-                                            "beschreibung": {"type": gl.Type.STRING, "description": "Bezeichnung der Position, z.B. 'Kostenpauschale', 'Schadensgutachten (netto)'"},
-                                            "soll_betrag": {"type": gl.Type.NUMBER, "description": "Betrag in Euro (Forderung)"},
-                                            "category": {"type": gl.Type.STRING, "description": "Kategorie: Gutachten | SV-Kosten | Reparatur | Mietfahrzeug | Schmerzensgeld | Kostenpauschale | RVG | Sonstiges"}
+                                            "beschreibung": {"type": "STRING", "description": "Bezeichnung der Position, z.B. 'Kostenpauschale', 'Schadensgutachten (netto)'"},
+                                            "soll_betrag": {"type": "NUMBER", "description": "Betrag in Euro (Forderung)"},
+                                            "category": {"type": "STRING", "description": "Kategorie: Gutachten | SV-Kosten | Reparatur | Mietfahrzeug | Schmerzensgeld | Kostenpauschale | RVG | Sonstiges"}
                                         },
                                         "required": ["beschreibung", "soll_betrag", "category"]
                                     },
@@ -1190,21 +1188,19 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
             role = "user" if msg["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": msg["content"]}]})
 
-        import google.generativeai as genai
-        from app.config import settings
-        
-        chat_model = genai.GenerativeModel(
-            model_name=settings.gemini_model,
+        from google.genai import types as genai_types
+        config = genai_types.GenerateContentConfig(
             tools=tools,
+            system_instruction=system_prompt,
         )
-        
-        # System instruction als Teil der Conversation anhängen
-        contents.insert(0, {"role": "user", "parts": [{"text": "SYSTEM INSTRUCTION: " + system_prompt}]})
-        contents.insert(1, {"role": "model", "parts": [{"text": "Verstanden, ich werde diese Anweisungen befolgen."}]}) 
 
         # Gemini aufrufen mit Function Calling
         try:
-            response = await chat_model.generate_content_async(contents)
+            response = await gemini.client.aio.models.generate_content(
+                model=gemini.model_name,
+                contents=contents,
+                config=config,
+            )
         except Exception as e:
             err_str = str(e)
             if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
@@ -1225,18 +1221,21 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
             tool_result = await self._execute_chat_tool(fc.name, fc_args_dict)
             actions_taken.append({"tool": fc.name, "result": tool_result})
 
-            # Tool-Ergebnis zurück an Gemini (glm.Part erforderlich, Raw-Dict wird nicht akzeptiert)
-            import google.ai.generativelanguage as gl
+            # Tool-Ergebnis zurück an Gemini
             contents.append(response.candidates[0].content)
-            contents.append(gl.Content(
+            contents.append(genai_types.Content(
                 role="user",
-                parts=[gl.Part(function_response=gl.FunctionResponse(
+                parts=[genai_types.Part(function_response=genai_types.FunctionResponse(
                     name=fc.name,
                     response={"result": tool_result}
                 ))]
             ))
             try:
-                response = await chat_model.generate_content_async(contents)
+                response = await gemini.client.aio.models.generate_content(
+                    model=gemini.model_name,
+                    contents=contents,
+                    config=config,
+                )
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
