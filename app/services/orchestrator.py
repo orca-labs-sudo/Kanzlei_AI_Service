@@ -5,28 +5,42 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+SYSTEM_PROMPT_VERSICHERUNG = (
+    "Du bist ein hochqualifizierter KI-Assistent für eine Anwaltskanzlei (Verkehrsrecht). "
+    "Deine Aufgabe ist es, professionelle Erstanschreiben an gegnerische Versicherungen oder Schädiger zu entwerfen. "
+    "WICHTIGE REGELN:\n"
+    "- Kein Briefkopf, keine Absender-/Empfängeradressen, kein Datum, kein Betreff, "
+    "KEINE Anrede, KEINE Grußformel — diese Teile werden vom System automatisch eingefügt.\n"
+    "- Schreibe NUR den reinen Fließtext des Briefes (ab dem ersten inhaltlichen Satz).\n"
+    "- Schreibe einen vollständigen, inhaltlich ausführlichen Brieftext.\n"
+    "- Nutze zwingend den juristischen Tonfall und beachte folgende Vorgaben strikt:\n"
+    "1. Zitiere immer die relevanten Anspruchsgrundlagen, insbesondere §§ 7, 18 StVG sowie § 115 VVG (Direktanspruch gegen die Haftpflichtversicherung).\n"
+    "2. Setze für Zahlungs- oder Antwortaufforderungen standardmäßig eine Frist von 14 Tagen ab Zugang des Schreibens, sofern in den Notizen nichts anderes angegeben ist.\n"
+    "3. Formuliere präzise Aufforderungen wie in den Beispielen, die dir als Kontext mitgegeben werden.\n"
+    "4. Erfasse ALLE relevanten Schadenspositionen aus den Falldaten und fordere sie konkret ein."
+)
+
+SYSTEM_PROMPT_MANDANT = (
+    "Du bist ein freundlicher KI-Assistent für eine Anwaltskanzlei (Verkehrsrecht). "
+    "Deine Aufgabe ist es, eine Sachstandsinformation für den eigenen Mandanten zu verfassen. "
+    "WICHTIGE REGELN:\n"
+    "- Kein Briefkopf, keine Absender-/Empfängeradressen, kein Datum, kein Betreff, "
+    "KEINE Anrede, KEINE Grußformel — diese Teile werden vom System automatisch eingefügt.\n"
+    "- Schreibe NUR den reinen Fließtext des Briefes (ab dem ersten inhaltlichen Satz).\n"
+    "- Der Ton ist freundlich, verständlich und informierend — KEIN juristischer Fachjargon, keine Paragraphen-Zitate.\n"
+    "- Erkläre dem Mandanten kurz und klar, was bisher unternommen wurde und wie der aktuelle Stand ist.\n"
+    "- Der Brief dient zur Kenntnisnahme, nicht zur Forderungsstellung.\n"
+    "- Keine Fristen setzen, keine Zahlungsaufforderungen.\n"
+    "- Schreibe in der Wir-Form (die Kanzlei schreibt an den Mandanten)."
+)
+
+
 class OrchestratorService:
     """
     Baut Super-Prompts basierend auf RAG-Kontext zusammen und kommuniziert mit Gemini.
     """
-    
-    def __init__(self):
-        self.system_prompt = (
-            "Du bist ein hochqualifizierter KI-Assistent für eine Anwaltskanzlei (Verkehrsrecht). "
-            "Deine Aufgabe ist es, professionelle Erstanschreiben an gegnerische Versicherungen oder Schädiger zu entwerfen. "
-            "WICHTIGE REGELN:\n"
-            "- Kein Briefkopf, keine Absender-/Empfängeradressen, kein Datum, kein Betreff, "
-            "KEINE Anrede, KEINE Grußformel — diese Teile werden vom System automatisch eingefügt.\n"
-            "- Schreibe NUR den reinen Fließtext des Briefes (ab dem ersten inhaltlichen Satz).\n"
-            "- Schreibe einen vollständigen, inhaltlich ausführlichen Brieftext.\n"
-            "- Nutze zwingend den juristischen Tonfall und beachte folgende Vorgaben strikt:\n"
-            "1. Zitiere immer die relevanten Anspruchsgrundlagen, insbesondere §§ 7, 18 StVG sowie § 115 VVG (Direktanspruch gegen die Haftpflichtversicherung).\n"
-            "2. Setze für Zahlungs- oder Antwortaufforderungen standardmäßig eine Frist von 14 Tagen ab Zugang des Schreibens, sofern in den Notizen nichts anderes angegeben ist.\n"
-            "3. Formuliere präzise Aufforderungen wie in den Beispielen, die dir als Kontext mitgegeben werden.\n"
-            "4. Erfasse ALLE relevanten Schadenspositionen aus den Falldaten und fordere sie konkret ein."
-        )
 
-    async def generate_draft(self, fall_daten: Dict[str, Any], notizen: str, rag_context: List[Dict[str, Any]]) -> str:
+    async def generate_draft(self, fall_daten: Dict[str, Any], notizen: str, rag_context: List[Dict[str, Any]], empfaenger_typ: str = 'versicherung') -> str:
         """
         Baut den Prompt und macht einen direkten Vertex API Call (ohne Langchain/SDK).
         """
@@ -47,8 +61,18 @@ class OrchestratorService:
         fall_string = "\n".join([f"- {k}: {v}" for k, v in fall_daten.items()])
         
         # 3. Super Prompt zusammenbauen
+        system_prompt = SYSTEM_PROMPT_MANDANT if empfaenger_typ == 'mandant' else SYSTEM_PROMPT_VERSICHERUNG
+        aufgabe = (
+            "Schreibe eine freundliche Sachstandsinformation für den Mandanten. "
+            "Erkläre kurz, was bisher unternommen wurde. Kein Fachjargon, keine Paragraphen. "
+            "Gib NUR den Fließtext ohne Metakommentar zurück."
+            if empfaenger_typ == 'mandant' else
+            "Schreibe unter extremer Berücksichtigung der Beispiele im Wissen oben nun das perfekte Erstanschreiben für diesen neuen Fall. "
+            "Erfinde keine Daten hinzu, die nicht im Fragebogen stehen. "
+            "Gib NUR den Text des Anschreibens ohne Metakommentar zurück."
+        )
         prompt = f"""
-{self.system_prompt}
+{system_prompt}
 
 HIER IST WISSEN AUS DER KANZLEI-DATENBANK WIE WIR ÄHNLICHE FÄLLE BEARBEITET HABEN:
 {rag_string}
@@ -61,9 +85,7 @@ Strukturierte Daten:
 {fall_string}
 
 AUFGABE:
-Schreibe unter extremer Berücksichtigung der Beispiele im Wissen oben nun das perfekte Erstanschreiben für diesen neuen Fall. 
-Erfinde keine Daten hinzu, die nicht im Fragebogen stehen. 
-Gib NUR den Text des Anschreibens ohne Metakommentar zurück.
+{aufgabe}
 """
         
         # 4. REST Call an Vertex AI (ohne SDK)

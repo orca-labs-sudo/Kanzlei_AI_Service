@@ -438,6 +438,7 @@ class RagDraftRequest(BaseModel):
     fall_daten: dict
     notizen: str
     fall_typ: Optional[str] = None
+    empfaenger_typ: Optional[str] = 'versicherung'
 
 
 class SchreibenRequest(BaseModel):
@@ -678,7 +679,8 @@ async def rag_generate_draft(request: RagDraftRequest):
         draft_text = await orchestrator_service.generate_draft(
             fall_daten=request.fall_daten,
             notizen=request.notizen,
-            rag_context=matches
+            rag_context=matches,
+            empfaenger_typ=request.empfaenger_typ or 'versicherung'
         )
         
         return {
