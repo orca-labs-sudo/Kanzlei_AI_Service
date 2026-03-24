@@ -1278,14 +1278,18 @@ async def akte_chat(request: Request):
         akte_id = body.get("akte_id")
         messages = body.get("messages", [])
         kontext = body.get("kontext", {})
-        
+        ki_memory = body.get("ki_memory", "")
+        active_tab = body.get("active_tab", "ki")
+
         if not akte_id:
             raise HTTPException(status_code=400, detail="akte_id fehlt")
-            
+
         result = await query_service.handle_akte_chat(
             akte_id=akte_id,
             messages=messages,
-            kontext=kontext
+            kontext=kontext,
+            ki_memory=ki_memory,
+            active_tab=active_tab,
         )
         return result
     except HTTPException:

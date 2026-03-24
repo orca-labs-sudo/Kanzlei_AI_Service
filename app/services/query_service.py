@@ -287,6 +287,20 @@ TOOL_DECLARATIONS: List[Dict] = [
 
 
 # ===========================================================================
+# HILFSFUNKTIONEN
+# ===========================================================================
+
+def _tab_hinweis(active_tab: str) -> str:
+    hinweise = {
+        "dokumente": "Fokus: Dokumente — Inhalte erklären, PDF-Umwandlung vorschlagen.",
+        "finanzen":  "Fokus: Finanzen — RVG-Berechnung, Zahlungspositionen, offene Beträge.",
+        "uebersicht": "Fokus: Kurzer Statusüberblick, nächster offener Schritt.",
+        "ki":        "Fokus: Vollständige Workflow-Unterstützung — Analyse, Briefe, Aktionen.",
+    }
+    return hinweise.get(active_tab, "")
+
+
+# ===========================================================================
 # QUERY SERVICE
 # ===========================================================================
 
@@ -978,6 +992,28 @@ class QueryService:
                     )
                     return _safe_json(resp)
 
+                elif tool_name == "aktualisiere_ki_memory":
+                    akte_id_mem = args["akte_id"]
+                    eintrag = args.get("eintrag", "").strip()
+                    # Aktuellen Stand laden und neuen Eintrag anhängen
+                    get_resp = await client.get(
+                        f"{self.django_base}/api/cases/akten/{akte_id_mem}/ki_memory/",
+                        headers=headers
+                    )
+                    current = get_resp.json().get("ki_memory", "") if get_resp.status_code == 200 else ""
+                    from datetime import datetime
+                    datum = datetime.now().strftime("%d.%m.%Y")
+                    new_memory = f"{current}\n[{datum}] {eintrag}".strip()
+                    resp = await client.post(
+                        f"{self.django_base}/api/cases/akten/{akte_id_mem}/ki_memory/",
+                        json={"ki_memory": new_memory},
+                        headers=headers
+                    )
+                    if resp.status_code in (200, 201):
+                        logger.info(f"ki_memory angehängt für Akte {akte_id_mem}: {eintrag[:80]}")
+                        return {"status": "gespeichert"}
+                    return {"error": f"ki_memory Fehler {resp.status_code}"}
+
             return {"error": f"Unbekanntes Tool: {tool_name}"}
 
         except httpx.TimeoutException:
@@ -992,6 +1028,8 @@ class QueryService:
         akte_id: int,
         messages: list[dict],
         kontext: dict,
+        ki_memory: str = "",
+        active_tab: str = "ki",
     ) -> dict:
         from app.main import get_gemini_client
         gemini = get_gemini_client()
@@ -1065,8 +1103,15 @@ FRISTEN:
 FRAGEBOGEN-DATEN:
 {kontext.get('fragebogen', {})}
 
+KI-MEMORY (Fakten aus früheren Sessions — NUR lesen, nie erfinden):
+{ki_memory if ki_memory else "Noch keine Einträge."}
+
+AKTIVER TAB: {active_tab}
+{_tab_hinweis(active_tab)}
+
 WICHTIGE REGELN:
 - Die AKTE-ID für alle Tool-Aufrufe ist: {akte_id} — verwende sie DIREKT, frage den User NIEMALS danach.
+- KI-MEMORY nach jeder bestätigten Aktion mit `aktualisiere_ki_memory` aktualisieren (nur Fakten, keine Spekulationen).
 - Du hast ALLE Finanzdaten, Dokumente und Aufgaben oben vollständig — nutze sie direkt aus dem Kontext.
 - Frage NIEMALS nach Daten, die bereits im obigen Kontext stehen.
 - GEGENSTANDSWERT für RVG = Summe der Soll-Beträge in den Finanzdaten (oben ausgewiesen). Wenn dieser Wert 0 oder sehr niedrig ist (z.B. nur Kostenpauschale), weise den User darauf hin, dass zuerst die Schadenspositionen (Reparatur, Gutachten etc.) eingetragen werden sollten, bevor RVG sinnvoll berechnet werden kann.
@@ -1174,6 +1219,20 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                                 "brief_text": {"type": "STRING", "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'). Diese Teile werden automatisch aus der Vorlage ergänzt."}
                             },
                             "required": ["akte_id", "empfaenger", "betreff", "brief_text"]
+                        }
+                    },
+                    {
+                        "name": "aktualisiere_ki_memory",
+                        "description": "KI-Memory der Akte mit einem neuen Fakteneintrag aktualisieren. "
+                                       "NUR nach erfolgreich ausgeführter Aktion aufrufen (nicht spekulativ). "
+                                       "Beispiel: 'Erstanschreiben Vers. erstellt 24.03.2026'",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "akte_id": {"type": "INTEGER"},
+                                "eintrag": {"type": "STRING", "description": "Faktischer Eintrag, max. 1-2 Sätze"}
+                            },
+                            "required": ["akte_id", "eintrag"]
                         }
                     },
                     {
