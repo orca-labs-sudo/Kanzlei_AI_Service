@@ -178,8 +178,8 @@ class AIExtractor:
                 provider_used = "gemini"
                 fallback_triggered = True
         
-        # Use Gemini (either configured or fallback)
-        if settings.llm_provider == "gemini":
+        # Use Vertex AI oder Gemini (konfiguriert oder Fallback nach Loki-Ausfall)
+        if settings.llm_provider in ("gemini", "vertex"):
             if not self.client:
                 logger.info("Client not ready, trying to configure again...")
                 self.configure_genai()
@@ -276,6 +276,23 @@ class AIExtractor:
 
             try:
                 response = self.client.models.generate_content(model=self.model, contents=content_parts)
+            except Exception as vertex_err:
+                # Automatischer Fallback: Vertex → Gemini API (wenn Key vorhanden)
+                if settings.llm_provider == "vertex" and settings.gemini_api_key:
+                    logger.error(f"[LLM: VERTEX AI] Fehler: {vertex_err}")
+                    logger.warning("[FALLBACK: VERTEX → GEMINI API] Wechsle automatisch auf Gemini API...")
+                    try:
+                        fallback_client = genai.Client(api_key=settings.gemini_api_key)
+                        response = fallback_client.models.generate_content(
+                            model=settings.gemini_model, contents=content_parts
+                        )
+                        logger.info(f"[LLM: GEMINI API] Fallback erfolgreich | Modell: {settings.gemini_model}")
+                    except Exception as gemini_err:
+                        logger.error(f"[LLM: GEMINI API] Fallback auch fehlgeschlagen: {gemini_err}")
+                        return CaseData(zusammenfassung="KI nicht verfügbar (Vertex + Gemini fehlgeschlagen)")
+                else:
+                    raise
+            try:
                 json_str = response.text.strip()
                 
                 # Clean up potential markdown formatting ```json ... ```

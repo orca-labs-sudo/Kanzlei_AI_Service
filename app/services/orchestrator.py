@@ -98,35 +98,44 @@ AUFGABE:
 {aufgabe}
 """
         
-        # 4. LLM-Client initialisieren (Vertex AI oder Gemini Developer API)
-        if settings.llm_provider == "vertex":
-            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
-            llm_client = genai.Client(
-                vertexai=True,
-                project=settings.vertex_project_id,
-                location=settings.vertex_location,
-            )
-            model = settings.vertex_model
-            logger.info(f"[LLM: VERTEX AI] Modell: {model} | empfaenger_typ: {empfaenger_typ}")
-        else:
-            llm_client = genai.Client(api_key=settings.gemini_api_key)
-            model = settings.gemini_model
-            logger.info(f"[LLM: GEMINI API] Modell: {model} | empfaenger_typ: {empfaenger_typ}")
-
-        # 5. Generierung via SDK (async)
+        # 4. Generierung mit automatischem Fallback: Vertex AI → Gemini API
         config = genai_types.GenerateContentConfig(
             temperature=0.2,  # Niedrige Temperatur für sichere juristische Texte
             max_output_tokens=4096,
         )
+
+        # Vertex AI (primär)
+        if settings.llm_provider == "vertex":
+            try:
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
+                llm_client = genai.Client(
+                    vertexai=True,
+                    project=settings.vertex_project_id,
+                    location=settings.vertex_location,
+                )
+                model = settings.vertex_model
+                logger.info(f"[LLM: VERTEX AI] Modell: {model} | empfaenger_typ: {empfaenger_typ}")
+                response = await llm_client.aio.models.generate_content(
+                    model=model, contents=prompt, config=config,
+                )
+                return response.text
+            except Exception as e:
+                logger.error(f"[LLM: VERTEX AI] Fehler: {e}")
+                if not settings.gemini_api_key:
+                    return "Fehler bei der Kommunikation mit der Künstlichen Intelligenz (Vertex fehlgeschlagen, kein Gemini-Fallback konfiguriert)."
+                logger.warning("[FALLBACK: VERTEX → GEMINI API] Vertex nicht erreichbar, wechsle automatisch auf Gemini API...")
+
+        # Gemini Developer API (primär oder Fallback)
         try:
+            llm_client = genai.Client(api_key=settings.gemini_api_key)
+            model = settings.gemini_model
+            logger.info(f"[LLM: GEMINI API] Modell: {model} | empfaenger_typ: {empfaenger_typ}")
             response = await llm_client.aio.models.generate_content(
-                model=model,
-                contents=prompt,
-                config=config,
+                model=model, contents=prompt, config=config,
             )
             return response.text
         except Exception as e:
-            logger.error(f"Fehler beim LLM-Call: {e}")
+            logger.error(f"[LLM: GEMINI API] Fehler: {e}")
             return "Fehler bei der Kommunikation mit der Künstlichen Intelligenz."
 
 # Singleton
