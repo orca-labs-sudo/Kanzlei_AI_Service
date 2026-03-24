@@ -92,17 +92,17 @@ def get_gemini_client():
     if _gemini_init_done:
         return _gemini_client
     _gemini_init_done = True
-    if settings.gemini_api_key:
+    if settings.llm_provider == "vertex" or settings.gemini_api_key:
         try:
             from app.services.gemini_client import GeminiClient
             _gemini_client = GeminiClient()
-            logger.info(f"✓ Gemini-Client bereit: {settings.gemini_model}")
+            logger.info(f"✓ LLM-Client bereit ({settings.llm_provider}): {_gemini_client.model_name}")
         except Exception as e:
             import traceback
-            logger.error(f"✗ Gemini-Client FEHLER: {e}")
+            logger.error(f"✗ LLM-Client FEHLER: {e}")
             logger.error(traceback.format_exc())
     else:
-        logger.warning("Gemini API Key nicht gesetzt — Keyword-Fallback")
+        logger.warning("Weder GEMINI_API_KEY noch Vertex AI konfiguriert — Keyword-Fallback")
     return _gemini_client
 
 
