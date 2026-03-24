@@ -632,9 +632,9 @@ class QueryService:
         system_instruction = (
             "Du bist ein erfahrener Rechtsanwalt. Formuliere einen professionellen "
             "Brieftext basierend auf dem vom Benutzer bereitgestellten Kontext.\n\n"
-            "WICHTIG: Generiere NUR den Brieftext ab der Anrede ('Sehr geehrte...') bis zur Grußformel.\n"
-            "KEIN Briefkopf, KEINE Adresse, KEIN Datum, KEIN Aktenzeichen am Anfang.\n"
-            "Der Briefkopf wird vom System automatisch eingefügt.\n"
+            "WICHTIG: Generiere NUR den Fließtext des Briefes — OHNE Anrede und OHNE Grußformel.\n"
+            "KEIN Briefkopf, KEINE Adresse, KEIN Datum, KEIN Aktenzeichen, KEINE Anrede ('Sehr geehrte...').\n"
+            "Anrede, Briefkopf und Signatur werden vom System automatisch ergänzt.\n"
             "Halte den rechtlichen Ton professionell und präzise."
         )
         
