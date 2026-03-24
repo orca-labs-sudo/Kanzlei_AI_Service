@@ -19,14 +19,15 @@ Vorlagen-Empfehlungen und Dokumenten-Verarbeitung bereit.
 
 ## Tech-Stack
 
-| Komponente | Technologie                        |
-|------------|------------------------------------|
-| Framework  | FastAPI (Python)                   |
-| RAG-DB     | ChromaDB (lokale Datei-Datenbank)  |
-| LLM Dev    | Google Gemini 2.0 Flash (API-Key)  |
-| LLM Prod   | Ollama/Loki (lokal, 10.10.10.5)    |
-| Embeddings | text-embedding-004 (Google API)    |
-| Server     | Uvicorn (Port 5000)                |
+| Komponente   | Technologie                                             |
+|--------------|---------------------------------------------------------|
+| Framework    | FastAPI (Python)                                        |
+| RAG-DB       | ChromaDB (lokale Datei-Datenbank)                       |
+| LLM Lokal    | Google Gemini 2.5 Flash (API-Key, `LLM_PROVIDER=gemini`)|
+| LLM Prod     | Vertex AI — Gemini 2.5 Flash, europe-west4 (`LLM_PROVIDER=vertex`) |
+| LLM Fallback | Ollama/Loki (lokal, 10.10.10.5, `LLM_PROVIDER=loki`)   |
+| Embeddings   | text-embedding-004 (Google API)                         |
+| Server       | Uvicorn (Port 5000)                                     |
 
 ---
 
@@ -100,11 +101,21 @@ Expand-Archive -Path rag_storage_backup_2026.zip -DestinationPath .
 ## Umgebungsvariablen (`.env`)
 
 ```env
-LLM_PROVIDER=gemini          # oder: loki
-GEMINI_API_KEY=<dein_key>
-GEMINI_MODEL=gemini-2.0-flash
+# LLM Provider: "gemini" = lokal (API-Key), "vertex" = Prod (DSGVO), "loki" = Ollama
+LLM_PROVIDER=gemini
 
-# Loki (Produktion)
+# Gemini Developer API (lokal / Fallback)
+GEMINI_API_KEY=<dein_key>
+GEMINI_MODEL=gemini-2.5-flash
+
+# Vertex AI (Produktion — DSGVO-konform, EU-Region)
+# LLM_PROVIDER=vertex
+# VERTEX_PROJECT_ID=your-gcp-project-id
+# VERTEX_LOCATION=europe-west4
+# VERTEX_MODEL=gemini-2.5-flash
+# GOOGLE_APPLICATION_CREDENTIALS=/app/google_service_account.json
+
+# Loki / Ollama
 LOKI_URL=http://10.10.10.5:11434
 LOKI_VISION_MODEL=llama-vision-work
 LOKI_MAPPING_MODEL=qwen-work
@@ -146,14 +157,30 @@ uvicorn app.main:app --reload --port 5000
 
 ---
 
-## KI-Architektur (Hybrid Two-Model)
+## KI-Architektur
 
-**Entwicklung:** Gemini 2.0 Flash (Google API)
-**Produktion:** Loki (Ollama auf eigenem Server) mit:
-  - `llama-vision-work` → für Bild/Dokument-Vision
-  - `qwen-work` → für Mapping/Strukturierung
+### LLM Provider (via `LLM_PROVIDER` in `.env`)
 
-Bei Loki-Nichterreichbarkeit: automatischer Fallback auf Gemini.
+| Provider | Umgebung | Auth | Modell |
+|---|---|---|---|
+| `gemini` | Lokal / Entwicklung | API-Key | gemini-2.5-flash |
+| `vertex` | **Produktion** (DSGVO!) | Service Account | gemini-2.5-flash, europe-west4 |
+| `loki` | Fallback (GPU-Server) | — | llama-vision-work + qwen-work |
+
+**Logging-Label** in den Service-Logs:
+- `[LLM: VERTEX AI]` — Vertex AI aktiv
+- `[LLM: GEMINI API]` — Gemini Developer API aktiv
+
+**Fallback-Logik (ai_extractor.py):** Loki → bei Fehler permanenter Wechsel auf Gemini/Vertex.
+
+### Vertex AI Deployment (Voraussetzungen)
+1. Vertex AI API im GCP-Projekt aktivieren
+2. Service Account → Rolle **"Vertex AI User"** (`roles/aiplatform.user`)
+3. `google_service_account.json` auf Server vorhanden (wird gemountet)
+4. `.env.production`: `LLM_PROVIDER=vertex` + `VERTEX_PROJECT_ID=<id>`
+
+### Rollback
+Branch `gemini-ohne-vertex` = Stand vor Vertex-Migration (Gemini Developer API)
 
 ---
 

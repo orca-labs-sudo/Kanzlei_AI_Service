@@ -9,12 +9,18 @@ import os
 class Settings(BaseSettings):
     """Application settings loaded from environment variables"""
 
-    # LLM Provider
-    llm_provider: Literal["gemini", "loki"] = "gemini"
+    # LLM Provider: "gemini" = Gemini Developer API (lokal), "vertex" = Vertex AI (Prod/DSGVO), "loki" = Ollama
+    llm_provider: Literal["gemini", "vertex", "loki"] = "gemini"
 
-    # Gemini Configuration
+    # Gemini Developer API (lokal / Fallback)
     gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.5-flash"  # Stand März 2026 — stabil, DSGVO-ready
+    gemini_model: str = "gemini-2.5-flash"
+
+    # Vertex AI (Produktion — DSGVO, EU-Region europe-west4)
+    vertex_project_id: str = ""
+    vertex_location: str = "europe-west4"
+    vertex_model: str = "gemini-2.5-flash"
+    google_application_credentials: str = "/app/google_service_account.json"
 
     # Loki Configuration (Hybrid Two-Model Architecture)
     loki_url: str = "http://10.10.10.5:11434"

@@ -1,6 +1,8 @@
 from typing import Dict, Any, List
 import logging
-import httpx
+import os
+from google import genai
+from google.genai import types as genai_types
 from app.config import settings
 
 logger = logging.getLogger(__name__)
@@ -47,8 +49,11 @@ class OrchestratorService:
         """
         Baut den Prompt und macht einen direkten Vertex API Call (ohne Langchain/SDK).
         """
-        if not settings.gemini_api_key:
-            logger.error("Kein Gemini API Key für Draft Generierung vorhanden!")
+        if settings.llm_provider == "vertex" and not settings.vertex_project_id:
+            logger.error("VERTEX_PROJECT_ID nicht konfiguriert!")
+            return "KI Service ist nicht konfiguriert (Vertex Project ID fehlt)."
+        if settings.llm_provider == "gemini" and not settings.gemini_api_key:
+            logger.error("GEMINI_API_KEY nicht konfiguriert!")
             return "KI Service ist nicht konfiguriert (API Key fehlt)."
             
         # 1. Bereite RAG Kontext vor
@@ -93,40 +98,36 @@ AUFGABE:
 {aufgabe}
 """
         
-        # 4. REST Call an Vertex AI (ohne SDK)
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent?key={settings.gemini_api_key}"
-        headers = {"Content-Type": "application/json"}
-        payload = {
-            "contents": [{
-                "parts": [{"text": prompt}]
-            }],
-            "generationConfig": {
-                "temperature": 0.2, # Niedrige Temperatur für sichere juristische Texte
-                "maxOutputTokens": 4096
-            }
-        }
-        
+        # 4. LLM-Client initialisieren (Vertex AI oder Gemini Developer API)
+        if settings.llm_provider == "vertex":
+            os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
+            llm_client = genai.Client(
+                vertexai=True,
+                project=settings.vertex_project_id,
+                location=settings.vertex_location,
+            )
+            model = settings.vertex_model
+            logger.info(f"[LLM: VERTEX AI] Modell: {model} | empfaenger_typ: {empfaenger_typ}")
+        else:
+            llm_client = genai.Client(api_key=settings.gemini_api_key)
+            model = settings.gemini_model
+            logger.info(f"[LLM: GEMINI API] Modell: {model} | empfaenger_typ: {empfaenger_typ}")
+
+        # 5. Generierung via SDK (async)
+        config = genai_types.GenerateContentConfig(
+            temperature=0.2,  # Niedrige Temperatur für sichere juristische Texte
+            max_output_tokens=4096,
+        )
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(url, headers=headers, json=payload)
-                response.raise_for_status()
-                data = response.json()
-                
-                # Extrahiere den Text
-                candidates = data.get("candidates", [])
-                if candidates and "content" in candidates[0] and "parts" in candidates[0]["content"]:
-                    return candidates[0]["content"]["parts"][0].get("text", "")
-                else:
-                    logger.error(f"Unbekanntes API-Format: {data}")
-                    return "Fehler bei der Textgenerierung (Format)."
-                    
-        except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP Fehler beim Gemini Call: {e.response.status_code} - {e.response.text}")
-            return f"Fehler bei der Kommunikation mit der Künstlichen Intelligenz (HTTP {e.response.status_code})."
+            response = await llm_client.aio.models.generate_content(
+                model=model,
+                contents=prompt,
+                config=config,
+            )
+            return response.text
         except Exception as e:
-            logger.error(f"Fehler beim Vertex/Gemini Call: {e}")
+            logger.error(f"Fehler beim LLM-Call: {e}")
             return "Fehler bei der Kommunikation mit der Künstlichen Intelligenz."
-        return "Fehler bei der Textgenerierung."
 
 # Singleton
 orchestrator_service = OrchestratorService()

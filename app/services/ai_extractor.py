@@ -88,16 +88,31 @@ class AIExtractor:
         self.configure_genai()
 
     def configure_genai(self):
-        if settings.gemini_api_key:
-            try:
-                logger.info(f"Configuring Gemini with key length: {len(settings.gemini_api_key)}")
+        try:
+            if settings.llm_provider == "vertex":
+                import os
+                if not settings.vertex_project_id:
+                    logger.error("VERTEX_PROJECT_ID nicht konfiguriert!")
+                    return
+                os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = settings.google_application_credentials
+                self.client = genai.Client(
+                    vertexai=True,
+                    project=settings.vertex_project_id,
+                    location=settings.vertex_location,
+                )
+                self.model = settings.vertex_model
+                logger.info(f"[LLM: VERTEX AI] Modell: {self.model} | Region: {settings.vertex_location}")
+            elif settings.llm_provider == "gemini":
+                if not settings.gemini_api_key:
+                    logger.warning("GEMINI_API_KEY nicht gesetzt!")
+                    return
                 self.client = genai.Client(api_key=settings.gemini_api_key)
-                self.model = settings.gemini_model  # Modell-Name als String
-                logger.info(f"Gemini Model '{settings.gemini_model}' configured successfully")
-            except Exception as e:
-                logger.error(f"Failed to configure Gemini: {str(e)}")
-        else:
-            logger.warning("Gemini API Key not set in settings!")
+                self.model = settings.gemini_model
+                logger.info(f"[LLM: GEMINI API] Modell: {self.model}")
+            else:
+                logger.info(f"[LLM: {settings.llm_provider.upper()}] Kein Gemini/Vertex-Client nötig")
+        except Exception as e:
+            logger.error(f"Fehler bei LLM-Konfiguration: {str(e)}")
 
     async def extract_case_data(self, text: str, attachments: list = None) -> CaseData:
         """
