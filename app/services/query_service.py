@@ -1268,6 +1268,10 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
             role = "user" if msg["role"] == "user" else "model"
             contents.append({"role": role, "parts": [{"text": msg["content"]}]})
 
+        # Vertex AI erfordert mindestens einen Content — bei leeren messages (Analyse-Start) Dummy einfügen
+        if not contents:
+            contents = [{"role": "user", "parts": [{"text": "Analysiere diese Akte und gib mir eine strukturierte Übersicht mit Handlungsempfehlungen."}]}]
+
         from google.genai import types as genai_types
         config = genai_types.GenerateContentConfig(
             tools=tools,
