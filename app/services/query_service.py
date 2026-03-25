@@ -1109,6 +1109,7 @@ Schritt 1 — Entwurf zeigen:
   Wenn der User einen Brief anfordert (Erstanschreiben, Sachstandsinfo, Widerspruch etc.),
   schreibe den vollständigen Brieftext ZUERST als Entwurf direkt in den Chat.
   Nur Fließtext: kein Briefkopf, kein Datum, keine Anrede, kein "Mit freundlichen Grüßen".
+  KEIN Markdown im Brieftext: keine **Fettschrift**, keine *Kursivschrift*, keine ## Überschriften, keine - Aufzählungszeichen.
   Beende die Antwort mit: "Soll ich diesen Brief so speichern? (Ja / Nein oder Änderungswunsch)"
 
 Schritt 2 — Speichern nach Bestätigung:

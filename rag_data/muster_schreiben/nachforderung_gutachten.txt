@@ -1,0 +1,12 @@
+FALL-TYP: nachforderung
+BETREFF: Nachforderung nach Vorlage des Sachverständigengutachtens
+
+ergänzend zu unserem Schreiben vom Erstschreibendatum übersenden wir Ihnen anliegend das Gutachten des öffentlich bestellten Sachverständigen über den an dem Fahrzeug unserer Mandantschaft entstandenen Schaden.
+
+Das Gutachten weist folgende Schadenspositionen aus:
+- Reparaturkosten netto: EUR Betrag
+- Wertminderung: EUR Betrag
+- Sachverständigenkosten: EUR Betrag
+- Nutzungsausfall: EUR Betrag für Tageanzahl Tage
+
+Wir fordern Sie auf, die gesamte Schadensumme bis zum Fristdatum auf das bekannte Konto zu überweisen. Im Übrigen verweisen wir auf unser Schreiben vom Erstschreibendatum.
