@@ -1010,6 +1010,58 @@ class QueryService:
             logger.error(f"_execute_chat_tool unerwarteter Fehler ({tool_name}): {e}", exc_info=True)
             return {"error": f"Interner Fehler bei '{tool_name}': {str(e)}"}
 
+    async def _erkenne_falltyp(self, kontext: dict, ki_memory: str) -> str:
+        """
+        Bestimmt den Falltyp aus Akten-Kontext.
+        Reihenfolge: ki_memory > fragebogen > Gegner/Ziel-Text > Heuristik
+        """
+        # 1. Bereits im ki_memory gespeichert?
+        if ki_memory:
+            for line in ki_memory.lower().split("\n"):
+                if "falltyp:" in line:
+                    return line.split("falltyp:", 1)[-1].strip().split()[0]
+
+        # 2. Fragebogen vorhanden?
+        fragebogen = kontext.get("fragebogen", {})
+        if isinstance(fragebogen, dict) and fragebogen:
+            if fragebogen.get("personenschaden"):
+                return "personenschaden"
+            # Unfallakte: Unfalldatum oder Kennzeichen vorhanden
+            if fragebogen.get("datum_zeit") or fragebogen.get("gegner_kennzeichen"):
+                return "verkehrsunfall_haftpflicht"
+
+        # 3. Schlüsselwörter in Ziel/Gegner
+        text = f"{kontext.get('ziel', '')} {kontext.get('gegner', '')}".lower()
+        if any(w in text for w in ["haftpflicht", "unfall", "versicherung", "schadensregulierung", "stvg", "vvg"]):
+            return "verkehrsunfall_haftpflicht"
+        if any(w in text for w in ["personenschaden", "schmerzensgeld", "verletzung", "behandlung"]):
+            return "personenschaden"
+
+        return "unbekannt"
+
+    async def _lade_workflow_kontext(self, falltyp: str) -> str:
+        """
+        Lädt das passende Workflow-Dokument aus RAG system_wissen.
+        Gibt leeren String zurück wenn kein Treffer oder Fehler.
+        """
+        if falltyp == "unbekannt":
+            return ""
+        try:
+            from app.services.rag_store import rag_store
+            query = f"Workflow Ablauf Stufen {falltyp.replace('_', ' ')}"
+            matches = await rag_store.search_similar(
+                query_text=query,
+                n_results=4,
+                filter_dict={"typ": "system_doku"},
+                collection_name="system_wissen",
+            )
+            if not matches:
+                return ""
+            return "\n---\n".join(m.get("text", m.get("document", "")) for m in matches)
+        except Exception as e:
+            logger.warning(f"_lade_workflow_kontext Fehler ({falltyp}): {e}")
+            return ""
+
     async def handle_akte_chat(
         self,
         akte_id: int,
@@ -1065,6 +1117,10 @@ class QueryService:
         # Gegenstandswert aus Finanzdaten berechnen (Summe aller Soll-Beträge)
         gegenstandswert = sum(p.get('soll', 0) for p in finanzdaten_raw)
 
+        # Stage-Detection: Falltyp erkennen + Workflow aus RAG laden
+        falltyp = await self._erkenne_falltyp(kontext, ki_memory)
+        workflow_kontext = await self._lade_workflow_kontext(falltyp)
+
         system_prompt = f"""Du bist Loki, der KI-Assistent der Kanzlei AWR24. Du hast VOLLSTÄNDIGEN Zugriff auf folgende Akte:
 
 AKTE-ID (für Tool-Aufrufe): {akte_id}
@@ -1093,12 +1149,19 @@ FRAGEBOGEN-DATEN:
 KI-MEMORY (Fakten aus früheren Sessions — NUR lesen, nie erfinden):
 {ki_memory if ki_memory else "Noch keine Einträge."}
 
+ERKANNTER FALLTYP: {falltyp}
+
+WORKFLOW-WISSEN FÜR DIESEN FALLTYP:
+{workflow_kontext if workflow_kontext else "Kein spezifischer Workflow bekannt — allgemeine Unterstützung aktiv. Falls Falltyp unklar: User freundlich fragen welcher Rechtsbereich (Verkehrsunfall, Mietrecht, Arbeitsrecht etc.)."}
+
 AKTIVER TAB: {active_tab}
 {_tab_hinweis(active_tab)}
 
 WICHTIGE REGELN:
 - Die AKTE-ID für alle Tool-Aufrufe ist: {akte_id} — verwende sie DIREKT, frage den User NIEMALS danach.
 - KI-MEMORY nach jeder bestätigten Aktion mit `aktualisiere_ki_memory` aktualisieren (nur Fakten, keine Spekulationen).
+- Wenn Falltyp erkannt und NICHT im KI-MEMORY: beim ersten Chat-Aufruf EINMALIG speichern: aktualisiere_ki_memory mit "Falltyp: {falltyp}".
+- Wenn User fragt "Was soll ich als nächstes tun?" oder ähnliches: Antwort aus WORKFLOW-WISSEN oben ableiten und aktuelle Stufe anhand Dokumente/Aufgaben/KI-MEMORY bestimmen.
 - Du hast ALLE Finanzdaten, Dokumente und Aufgaben oben vollständig — nutze sie direkt aus dem Kontext.
 - Frage NIEMALS nach Daten, die bereits im obigen Kontext stehen.
 - GEGENSTANDSWERT für RVG = Summe der Soll-Beträge in den Finanzdaten (oben ausgewiesen). Wenn dieser Wert 0 oder sehr niedrig ist (z.B. nur Kostenpauschale), weise den User darauf hin, dass zuerst die Schadenspositionen (Reparatur, Gutachten etc.) eingetragen werden sollten, bevor RVG sinnvoll berechnet werden kann.
