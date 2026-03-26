@@ -1153,6 +1153,11 @@ class QueryService:
                 "Es gibt ein Schreiben an die Versicherung, aber KEIN Schreiben an den Mandanten! "
                 "Der Mandant wurde noch nicht über die Mandatsübernahme informiert."
             )
+        if not kontext.get('mandant_bankverbindung', '').strip():
+            workflow_luecken.append(
+                "Beim Mandanten ist KEINE Bankverbindung (IBAN) hinterlegt! "
+                "Diese wird für spätere Auszahlungen benötigt — bitte beim Mandanten erfragen und in den Stammdaten nachtragen."
+            )
 
         system_prompt = f"""Du bist Loki, der KI-Assistent der Kanzlei AWR24. Du hast VOLLSTÄNDIGEN Zugriff auf folgende Akte:
 
