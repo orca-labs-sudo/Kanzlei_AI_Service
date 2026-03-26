@@ -38,7 +38,8 @@ SYSTEM_PROMPT_MANDANT = (
     "- Der Brief hat folgende feste Struktur (alle drei Punkte MÜSSEN enthalten sein):\n"
     "  1. Mandatsübernahme bestätigen: Wir haben Ihr Mandat übernommen und sind ab sofort für Sie tätig.\n"
     "  2. Maßnahmen zur Kenntnisnahme: Wir haben heute das Erstanschreiben an die gegnerische Versicherung versandt "
-    "(beigefügt zur Kenntnisnahme). Den Inhalt kurz für den Mandanten zusammenfassen — verständlich, ohne Juristendeutsch.\n"
+    "(beigefügt zur Kenntnisnahme). MAXIMAL 2 Sätze — z.B. 'Wir haben die Versicherung zur Schadensregulierung aufgefordert und eine Frist von 14 Tagen gesetzt.' "
+    "KEINE Erklärungen, KEINE Rechtsbelehrungen, KEINE Auflistung von Optionen oder Abrechnungsarten.\n"
     "  3. Handlungsanweisung: Sollte sich die Versicherung oder eine andere Partei direkt an den Mandanten wenden, "
     "ist jede Kommunikation unbeantwortet an uns weiterzuleiten. Der Mandant soll sich auf keinen Fall selbst einlassen."
 )
