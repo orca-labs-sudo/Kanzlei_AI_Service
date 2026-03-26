@@ -246,6 +246,36 @@ class RAGStore:
             logger.error(f"✗ Fehler bei der akte_dokumente Suche (akte_id={akte_id}): {e}")
             return []
 
+    def get_alle_akte_chunks(self, akte_id: int) -> List[Dict]:
+        """
+        Gibt ALLE indexierten Chunks einer Akte zurück — ungefiltert, vollständig.
+        Sortiert nach Dokument-ID und Chunk-Index für logische Lesereihenfolge.
+
+        Kein semantisches Filtern — Loki soll die gesamte Akte kennen,
+        wie ein Anwalt der die Akte aufschlägt und alles liest.
+        """
+        if not self._akte_collection:
+            logger.error("RAG Store: 'akte_dokumente' Collection nicht initialisiert!")
+            return []
+        try:
+            results = self._akte_collection.get(
+                where={"akte_id": str(akte_id)},
+                include=["documents", "metadatas", "ids"],
+            )
+            chunks = []
+            docs = results.get("documents") or []
+            metas = results.get("metadatas") or []
+            ids = results.get("ids") or []
+            for doc, meta, cid in zip(docs, metas, ids):
+                chunks.append({"text": doc, "metadata": meta, "id": cid})
+            # Sortieren nach ID (akte_X_dok_Y_chunk_Z) → logische Lesereihenfolge
+            chunks.sort(key=lambda c: c.get("id", ""))
+            logger.info(f"get_alle_akte_chunks: {len(chunks)} Chunks für Akte {akte_id} geladen.")
+            return chunks
+        except Exception as e:
+            logger.error(f"get_alle_akte_chunks Fehler (akte_id={akte_id}): {e}")
+            return []
+
     def get_indexed_dokument_ids(self, akte_id: int | None = None) -> list[int]:
         """
         Gibt alle dokument_ids zurück, die bereits in 'akte_dokumente' indexiert sind.

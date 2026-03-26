@@ -1173,57 +1173,32 @@ class QueryService:
         falltyp = await self._erkenne_falltyp(kontext, ki_memory)
         workflow_kontext = await self._lade_workflow_kontext(falltyp)
 
-        # Workflow-Lücken erkennen: Fehlende Dokumente basierend auf vorhandenen
-        workflow_luecken = []
-        titel_all = " ".join(d.get('titel', '').lower() for d in dokumente_raw)
-        hat_vers_brief = any(
-            w in d.get('titel', '').lower()
-            for d in dokumente_raw
-            for w in ('versicherung', 'vers.', 'haftpflicht', 'gegner')
-        )
-        hat_mdt_brief = any(
-            'mandant' in d.get('titel', '').lower()
-            for d in dokumente_raw
-        )
-        if hat_vers_brief and not hat_mdt_brief:
-            workflow_luecken.append(
-                "Es gibt ein Schreiben an die Versicherung, aber KEIN Schreiben an den Mandanten! "
-                "Der Mandant wurde noch nicht über die Mandatsübernahme informiert."
-            )
-        if not kontext.get('mandant_bankverbindung', '').strip():
-            workflow_luecken.append(
-                "Beim Mandanten ist KEINE Bankverbindung (IBAN) hinterlegt! "
-                "Diese wird für spätere Auszahlungen benötigt — bitte beim Mandanten erfragen und in den Stammdaten nachtragen."
-            )
+        # IBAN-Status für Loki (Fakt aus DB, kein Raten)
+        iban_hinterlegt = bool(kontext.get('mandant_bankverbindung', '').strip())
 
         from datetime import datetime as _dt
         heute_str = _dt.now().strftime("%d.%m.%Y")
 
-        # RAG: Relevante Dokument-Inhalte aus akte_dokumente (search-on-demand → kein Token-Overhead)
+        # RAG: ALLE Dokument-Inhalte dieser Akte laden — vollständig, wie Anwalt der Akte liest
         akte_rag_text = ""
         try:
             from app.services.rag_store import rag_store  # type: ignore[attr-defined]
-            # Letzte User-Nachricht als Suchquery verwenden (semantisch am relevantesten)
-            last_user_msg = next(
-                (m["content"] for m in reversed(messages) if m.get("role") == "user"),
-                kontext.get("ziel", "Dokument Inhalt Akte"),
-            )
-            rag_chunks = await rag_store.search_akte_dokumente(
-                query_text=str(last_user_msg),
-                akte_id=akte_id,
-                n_results=6,
-            )
-            if rag_chunks:
+            alle_chunks = rag_store.get_alle_akte_chunks(akte_id)
+            if alle_chunks:
                 chunk_parts = []
-                for chunk in rag_chunks:
+                aktueller_titel = None
+                for chunk in alle_chunks:
                     meta = chunk.get("metadata", {})
                     titel_c = meta.get("titel", "?")
                     kat_c = meta.get("kategorie", "?")
-                    chunk_parts.append(f"[{kat_c}: {titel_c}]\n{chunk.get('text', '')}")  # type: ignore[arg-type]
-                akte_rag_text = "\n---\n".join(chunk_parts)
-                logger.info(f"handle_akte_chat: {len(rag_chunks)} RAG-Chunks für Akte {akte_id} geladen.")
+                    if titel_c != aktueller_titel:
+                        chunk_parts.append(f"\n[{kat_c}: {titel_c}]")
+                        aktueller_titel = titel_c
+                    chunk_parts.append(str(chunk.get("text", "")))  # type: ignore[arg-type]
+                akte_rag_text = "\n".join(chunk_parts).strip()
+                logger.info(f"handle_akte_chat: {len(alle_chunks)} Chunks (vollständig) für Akte {akte_id} geladen.")
         except Exception as _rag_err:
-            logger.warning(f"akte_dokumente RAG-Suche fehlgeschlagen (akte_id={akte_id}): {_rag_err}")
+            logger.warning(f"akte_dokumente Vollladung fehlgeschlagen (akte_id={akte_id}): {_rag_err}")
 
         system_prompt = f"""Du bist Loki, der KI-Assistent der Kanzlei AWR24. Du hast VOLLSTÄNDIGEN Zugriff auf folgende Akte:
 
@@ -1242,8 +1217,22 @@ FINANZDATEN (bereits vollständig geladen):
 DOKUMENTE IN DER AKTE (hochgeladene Dateien, Scans — Metadaten):
 {dokumente_text}
 
-DOKUMENT-INHALTE (relevante Auszüge aus hochgeladenen Dokumenten, automatisch per Semantik gefunden):
-{akte_rag_text if akte_rag_text else "Keine indizierten Dokument-Inhalte gefunden (Dokumente noch nicht im Suchindex oder keine relevanten Treffer)."}
+KANZLEI-ABKÜRZUNGEN (in Dokumenttiteln und Texten — verbindlich für die gesamte Akte):
+Mdt. / MDT  = Mandant          |  Vers. / VERS  = Versicherung / Gegner
+SV          = Sachverständiger  |  GA            = Gutachten
+VM          = Vollmacht         |  VN            = Versicherungsnehmer
+VU          = Verkehrsunfall    |  STA           = Staatsanwaltschaft / Staatsanwalt
+ZM          = Zahlungsmitteilung / Zahlungsaufforderung
+GDV         = Gesamtverband der Deutschen Versicherungswirtschaft (Branchenverband)
+DS          = Deckungsschutz    |  RG            = Regulierung
+RW          = Restwert          |  AN            = Anforderung
+KZ          = Kennzeichen       |  AZ            = Aktenzeichen
+REP         = Reparatur         |  NU            = Nutzungsausfall
+AWR24       = Kanzlei (RA Winter, Aktenzeichen-Präfix)
+Erstanschr. = Erstanschreiben   |  Bestät.       = Bestätigung
+
+DOKUMENT-INHALTE (VOLLSTÄNDIGER Akteninhalt — alle indexierten Dokumente dieser Akte):
+{akte_rag_text if akte_rag_text else "Keine indizierten Dokument-Inhalte (Dokumente noch nicht im Suchindex — ggf. index_alle_dokumente ausführen)."}
 
 GENERIERTE BRIEFE (durch Loki erstellte Schreiben — Inhalt vollständig lesbar):
 {gen_docs_text}
@@ -1265,7 +1254,7 @@ ERKANNTER FALLTYP: {falltyp}
 WORKFLOW-WISSEN FÜR DIESEN FALLTYP:
 {workflow_kontext if workflow_kontext else "Kein spezifischer Workflow bekannt — allgemeine Unterstützung aktiv. Falls Falltyp unklar: User freundlich fragen welcher Rechtsbereich (Verkehrsunfall, Mietrecht, Arbeitsrecht etc.)."}
 
-{"WORKFLOW-LÜCKEN (WICHTIG — beim nächsten Chat-Aufruf AKTIV ansprechen, auch wenn der User nicht danach fragt):" + chr(10) + chr(10).join(f"- {l}" for l in workflow_luecken) if workflow_luecken else ""}
+MANDANT IBAN/BANKVERBINDUNG IN DB: {"Ja, hinterlegt" if iban_hinterlegt else "NEIN — noch nicht eingetragen (wird für Auszahlungen benötigt)"}
 
 AKTIVER TAB: {active_tab}
 {_tab_hinweis(active_tab)}
@@ -1277,7 +1266,8 @@ WICHTIGE REGELN:
 - Nach Brief-Erstellung (`erstelle_brief`): Speichere SOFORT in ki_memory: Datum + Empfänger + Betreff + die ersten 400 Zeichen des Brieftextes. Beispiel: "[26.03.2026] Erstanschreiben Vers. (Betreff: Schadensregulierung): Hiermit zeigen wir an, dass wir Herrn Kalaycioglu in der obengenannten Angelegenheit mandatiert wurden..."
 - Wenn Falltyp erkannt und NICHT im KI-MEMORY: beim ersten Chat-Aufruf EINMALIG speichern: aktualisiere_ki_memory mit "Falltyp: {falltyp}".
 - Wenn User fragt "Was soll ich als nächstes tun?" oder ähnliches: Antwort aus WORKFLOW-WISSEN oben ableiten und aktuelle Stufe anhand Dokumente/Aufgaben/KI-MEMORY bestimmen.
-- Wenn WORKFLOW-LÜCKEN oben ausgewiesen sind: Weise den User in deiner nächsten Antwort IMMER aktiv darauf hin — freundlich aber klar. Beispiel: "Ich sehe, es gibt ein Schreiben an die Versicherung, aber noch kein Schreiben an den Mandanten. Soll ich das direkt erstellen?"
+- WORKFLOW-LÜCKEN EIGENANALYSE: Leite Lücken SELBST aus den DOKUMENT-INHALTEN und der Dokumentliste ab — nicht aus Titeln raten! Nutze dazu die KANZLEI-ABKÜRZUNGEN. Beispiel: Gibt es ein Schreiben an Vers. aber keines an Mdt.? Wurde nach IBAN gefragt? Liegt eine Vollmacht vor? Weise den User aktiv auf echte Lücken hin — aber nur wenn du sie durch Inhaltslesen BELEGEN kannst.
+- IBAN: Wenn "MANDANT IBAN" oben "NEIN" zeigt: weise aktiv darauf hin, dass die IBAN noch nicht in den Stammdaten hinterlegt ist.
 - Du hast ALLE Finanzdaten, Dokumente und Aufgaben oben vollständig — nutze sie direkt aus dem Kontext.
 - Frage NIEMALS nach Daten, die bereits im obigen Kontext stehen.
 - GEGENSTANDSWERT für RVG = Summe der Soll-Beträge in den Finanzdaten (oben ausgewiesen). Wenn dieser Wert 0 oder sehr niedrig ist (z.B. nur Kostenpauschale), weise den User darauf hin, dass zuerst die Schadenspositionen (Reparatur, Gutachten etc.) eingetragen werden sollten, bevor RVG sinnvoll berechnet werden kann.
