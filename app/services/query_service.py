@@ -981,7 +981,28 @@ class QueryService:
                         },
                         headers=headers
                     )
-                    return _safe_json(resp)
+                    result = _safe_json(resp)
+                    # AUTO ki_memory: direkt nach erfolgreichem Brief speichern (nicht auf Loki warten)
+                    if resp.status_code in (200, 201) and "error" not in result:
+                        from datetime import datetime as _now_dt
+                        datum_mem = _now_dt.now().strftime("%d.%m.%Y")
+                        empf_label = "Vers." if args.get("empfaenger", "versicherung") == "versicherung" else "Mdt."
+                        betreff_mem = str(args.get("betreff", ""))
+                        auszug = str(args.get("brief_text", ""))[0:400]  # type: ignore[index]
+                        eintrag = f"Brief an {empf_label} (Betreff: {betreff_mem}): {auszug}"
+                        mem_get = await client.get(
+                            f"{self.django_base}/api/cases/akten/{args['akte_id']}/ki_memory/",
+                            headers=headers
+                        )
+                        current_mem = mem_get.json().get("ki_memory", "") if mem_get.status_code == 200 else ""
+                        new_mem = f"{current_mem}\n[{datum_mem}] {eintrag}".strip()
+                        await client.post(
+                            f"{self.django_base}/api/cases/akten/{args['akte_id']}/ki_memory/",
+                            json={"ki_memory": new_mem},
+                            headers=headers
+                        )
+                        logger.info(f"AUTO ki_memory Brief für Akte {args['akte_id']}: {eintrag[0:80]}")  # type: ignore[index]
+                    return result
 
                 elif tool_name == "erstelle_zahlungspositionen":
                     resp = await client.post(
@@ -1129,6 +1150,22 @@ class QueryService:
             for d in dokumente_raw
         ) if dokumente_raw else "Keine Dokumente vorhanden."
 
+        # Generierte Briefe (KI-erstellte Schreiben) mit Inhalt-Snippet
+        gen_docs_raw = kontext.get('generierte_dokumente', [])
+        if gen_docs_raw:
+            gen_docs_lines = []
+            for gd in gen_docs_raw:
+                raw_snippet = gd.get('inhalt_snippet') or ''
+                snippet = str(raw_snippet).strip()
+                kurz = snippet[0:400]  # type: ignore[index]
+                zeile = f"  [{gd.get('typ', '–')}] {gd.get('betreff', '?')} ({gd.get('erstellt_am', 'k.A.')})"
+                if kurz:
+                    zeile += f"\n    Inhalt: {kurz}..."
+                gen_docs_lines.append(zeile)
+            gen_docs_text = "\n".join(gen_docs_lines)
+        else:
+            gen_docs_text = "Noch keine KI-generierten Briefe vorhanden."
+
         # Gegenstandswert aus Finanzdaten berechnen (Summe aller Soll-Beträge)
         gegenstandswert = sum(p.get('soll', 0) for p in finanzdaten_raw)
 
@@ -1176,8 +1213,11 @@ GEGENSTANDSWERT (Summe Soll-Beträge Finanzen): {gegenstandswert:.2f} €
 FINANZDATEN (bereits vollständig geladen):
 {finanzdaten_text}
 
-DOKUMENTE IN DER AKTE:
+DOKUMENTE IN DER AKTE (hochgeladene Dateien, Scans):
 {dokumente_text}
+
+GENERIERTE BRIEFE (durch Loki erstellte Schreiben — Inhalt vollständig lesbar):
+{gen_docs_text}
 
 OFFENE AUFGABEN:
 {aufgaben_text}
