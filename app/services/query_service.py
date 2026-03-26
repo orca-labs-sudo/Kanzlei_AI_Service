@@ -1199,6 +1199,32 @@ class QueryService:
         from datetime import datetime as _dt
         heute_str = _dt.now().strftime("%d.%m.%Y")
 
+        # RAG: Relevante Dokument-Inhalte aus akte_dokumente (search-on-demand → kein Token-Overhead)
+        akte_rag_text = ""
+        try:
+            from app.services.rag_store import rag_store  # type: ignore[attr-defined]
+            # Letzte User-Nachricht als Suchquery verwenden (semantisch am relevantesten)
+            last_user_msg = next(
+                (m["content"] for m in reversed(messages) if m.get("role") == "user"),
+                kontext.get("ziel", "Dokument Inhalt Akte"),
+            )
+            rag_chunks = await rag_store.search_akte_dokumente(
+                query_text=str(last_user_msg),
+                akte_id=akte_id,
+                n_results=6,
+            )
+            if rag_chunks:
+                chunk_parts = []
+                for chunk in rag_chunks:
+                    meta = chunk.get("metadata", {})
+                    titel_c = meta.get("titel", "?")
+                    kat_c = meta.get("kategorie", "?")
+                    chunk_parts.append(f"[{kat_c}: {titel_c}]\n{chunk.get('text', '')}")  # type: ignore[arg-type]
+                akte_rag_text = "\n---\n".join(chunk_parts)
+                logger.info(f"handle_akte_chat: {len(rag_chunks)} RAG-Chunks für Akte {akte_id} geladen.")
+        except Exception as _rag_err:
+            logger.warning(f"akte_dokumente RAG-Suche fehlgeschlagen (akte_id={akte_id}): {_rag_err}")
+
         system_prompt = f"""Du bist Loki, der KI-Assistent der Kanzlei AWR24. Du hast VOLLSTÄNDIGEN Zugriff auf folgende Akte:
 
 HEUTIGES DATUM: {heute_str} — nutze dieses Datum als Basis für alle Fristen und Aufgaben!
@@ -1213,8 +1239,11 @@ GEGENSTANDSWERT (Summe Soll-Beträge Finanzen): {gegenstandswert:.2f} €
 FINANZDATEN (bereits vollständig geladen):
 {finanzdaten_text}
 
-DOKUMENTE IN DER AKTE (hochgeladene Dateien, Scans):
+DOKUMENTE IN DER AKTE (hochgeladene Dateien, Scans — Metadaten):
 {dokumente_text}
+
+DOKUMENT-INHALTE (relevante Auszüge aus hochgeladenen Dokumenten, automatisch per Semantik gefunden):
+{akte_rag_text if akte_rag_text else "Keine indizierten Dokument-Inhalte gefunden (Dokumente noch nicht im Suchindex oder keine relevanten Treffer)."}
 
 GENERIERTE BRIEFE (durch Loki erstellte Schreiben — Inhalt vollständig lesbar):
 {gen_docs_text}
