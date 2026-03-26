@@ -1159,8 +1159,12 @@ class QueryService:
                 "Diese wird für spätere Auszahlungen benötigt — bitte beim Mandanten erfragen und in den Stammdaten nachtragen."
             )
 
+        from datetime import datetime as _dt
+        heute_str = _dt.now().strftime("%d.%m.%Y")
+
         system_prompt = f"""Du bist Loki, der KI-Assistent der Kanzlei AWR24. Du hast VOLLSTÄNDIGEN Zugriff auf folgende Akte:
 
+HEUTIGES DATUM: {heute_str} — nutze dieses Datum als Basis für alle Fristen und Aufgaben!
 AKTE-ID (für Tool-Aufrufe): {akte_id}
 AKTENZEICHEN: {kontext.get('aktenzeichen', '')}
 MANDANT: {kontext.get('mandant', '')}
