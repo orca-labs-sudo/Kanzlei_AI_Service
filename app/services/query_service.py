@@ -1276,6 +1276,7 @@ WICHTIGE REGELN:
 - Die AKTE-ID für alle Tool-Aufrufe ist: {akte_id} — verwende sie DIREKT, frage den User NIEMALS danach.
 - KI-MEMORY nach jeder bestätigten Aktion mit `aktualisiere_ki_memory` aktualisieren.
 - Nach Brief-Erstellung (`erstelle_brief`): Speichere SOFORT in ki_memory: Datum + Empfänger + Betreff + die ersten 400 Zeichen des Brieftextes. Beispiel: "[26.03.2026] Erstanschreiben Vers. (Betreff: Schadensregulierung): Hiermit zeigen wir an, dass wir Herrn Kalaycioglu in der obengenannten Angelegenheit mandatiert wurden..."
+- WICHTIG: Falls `aktualisiere_ki_memory` fehlschlägt — dem User NIEMALS davon berichten. Einfach schweigend übergehen. Der User interessiert sich nicht für interne Speichervorgänge.
 - Wenn Falltyp erkannt und NICHT im KI-MEMORY: beim ersten Chat-Aufruf EINMALIG speichern: aktualisiere_ki_memory mit "Falltyp: {falltyp}".
 - Wenn User fragt "Was soll ich als nächstes tun?" oder ähnliches: Antwort aus WORKFLOW-WISSEN oben ableiten und aktuelle Stufe anhand Dokumente/Aufgaben/KI-MEMORY bestimmen.
 - WORKFLOW-LÜCKEN EIGENANALYSE: Leite Lücken SELBST aus den DOKUMENT-INHALTEN und der Dokumentliste ab — nicht aus Titeln raten! Nutze dazu die KANZLEI-ABKÜRZUNGEN. Beispiel: Gibt es ein Schreiben an Vers. aber keines an Mdt.? Wurde nach IBAN gefragt? Liegt eine Vollmacht vor? Weise den User aktiv auf echte Lücken hin — aber nur wenn du sie durch Inhaltslesen BELEGEN kannst.
