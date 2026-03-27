@@ -1407,7 +1407,19 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
 - STATUS ÄNDERN: Kündige an und warte auf Bestätigung ("Ja", "Ok", "Mach das" etc.), bevor du `aendere_aktenstatus` aufrufst.
 - WICHTIG: Rufe Tools TATSÄCHLICH auf — antworte NIEMALS nur mit Text "Aufgabe erstellt" oder "Status geändert" ohne den entsprechenden Tool-Aufruf durchzuführen!
 - NIEMALS ankündigen was du tun wirst ("Ich werde jetzt...", "Zuerst werde ich...", "Ich werde nun...") — tue es EINFACH SOFORT. Rufe den ersten Tool-Call direkt auf ohne Vortext.
-- Bei mehreren Schritten (z.B. RVG berechnen → buchen → Brief erstellen): starte SOFORT mit dem ersten Tool-Call, ohne Erklärung was als nächstes kommt.
+
+KOMBINIERTE AUFGABEN — PFLICHT-KETTE (nicht unterbrechen):
+Wenn der User mehrere Dinge auf einmal verlangt (z.B. "buche alles und erstelle einen Brief"),
+führe ALLE Schritte in einer einzigen Antwort durch — ohne zwischendurch Text zu schreiben:
+
+Beispiel "Buche alle Zahlungen + RVG + Finalschreiben":
+  Schritt A: buche_zahlung für jede offene Zahlungsposition (alle nacheinander)
+  Schritt B: berechne_rvg aufrufen → RVG-Positionen werden automatisch angelegt
+  Schritt C: Brief-Entwurf an Versicherung direkt in den Chat (Schritt 1 des Brief-Ablaufs)
+  → ERST nach dem Brief-Entwurf stoppen und auf User-Bestätigung warten
+
+NIEMALS nach Schritt A oder B stoppen und auf weitere Anweisungen warten —
+die Kette MUSS bis zum Brief-Entwurf durchlaufen.
 """
 
         tools = [
