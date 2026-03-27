@@ -1604,38 +1604,11 @@ die Kette MUSS bis zum Brief-Entwurf durchlaufen.
             return None
 
         actions_taken = []
-        _nudge_done = False
         while True:
             fc = _find_fc(response)
 
             if fc is None:
-                # Einmaliger Retry mit mode=ANY — NUR wenn noch keine Tool-Calls gelaufen sind
-                if not _nudge_done and not actions_taken:
-                    _nudge_done = True
-                    contents.append(response.candidates[0].content)  # type: ignore[union-attr]
-                    contents.append(genai_types.Content(
-                        role="user",
-                        parts=[genai_types.Part(text="Führe jetzt den ersten Schritt aus.")]
-                    ))
-                    forced_config = genai_types.GenerateContentConfig(
-                        tools=tools,
-                        system_instruction=system_prompt,
-                        thinking_config=genai_types.ThinkingConfig(include_thoughts=False),
-                        tool_config=genai_types.ToolConfig(
-                            function_calling_config=genai_types.FunctionCallingConfig(mode="ANY")
-                        ),
-                    )
-                    try:
-                        response = await gemini.client.aio.models.generate_content(
-                            model=gemini.model_name, contents=contents, config=forced_config,
-                        )
-                    except Exception as e:
-                        err_str = str(e)
-                        if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
-                            return {"reply": "⏳ Gemini API Tageslimit erreicht. Bitte in einigen Minuten erneut versuchen.", "actions_taken": actions_taken}
-                        raise
-                    continue
-                break  # Kein FC nach Retry → fertig
+                break  # Kein Tool-Call → fertig (Text-Antwort folgt)
 
             try:
                 fc_args_dict = {k: v for k, v in fc.args.items()}
