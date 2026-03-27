@@ -1423,6 +1423,14 @@ WENN USER JURISTISCHE ANALYSE ALS BRIEFBASIS EINFÜGT (z.B. aus NotebookLM, Chat
   3. Dann den Entwurf mit den Gebühren im Chat zeigen (Schritt 1).
 - Die RVG-Gebühren werden AUTOMATISCH aus dem Gegenstandswert der Akte berechnet — frage NICHT danach.
 
+RVG IST EINE OFFENE FORDERUNG — NIEMALS ALS BEZAHLT BUCHEN:
+- `berechne_rvg` erstellt eine neue Zahlungsposition für die Anwaltsgebühren.
+- Diese Position ist OFFEN — die Versicherung hat die RVG noch NICHT bezahlt.
+- NIEMALS `buche_zahlung` für eine RVG-Position aufrufen die gerade erst erstellt wurde.
+- "buche alles passend" bedeutet: buche die vom Versicherung ERHALTENEN Zahlungen für Schaden.
+  RVG wird erst gebucht wenn die Versicherung die Gebühren tatsächlich überweist.
+- Das Finalschreiben FORDERT die RVG-Zahlung — es bestätigt sie NICHT als eingegangen.
+
 ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
 - AUFGABE ERSTELLEN: Rufe `erstelle_aufgabe` SOFORT auf wenn der User eine Aufgabe erstellen möchte — kein Bestätigungsschritt notwendig. Falls der User kein Datum nennt, frage zuerst "Bis wann?" und warte auf die Antwort, bevor du das Tool aufrufst.
 - STATUS ÄNDERN: Kündige an und warte auf Bestätigung ("Ja", "Ok", "Mach das" etc.), bevor du `aendere_aktenstatus` aufrufst.
@@ -1435,13 +1443,14 @@ führe ALLE Schritte in einer einzigen Antwort durch — ohne zwischendurch Text
 
 Beispiel "Buche alle Zahlungen + RVG + Finalschreiben":
   Schritt A: get_finanzdaten aufrufen und Positionen prüfen
-  Schritt B: Für jede Position: SOLL mit dem erwarteten Betrag vergleichen.
-             Falls SOLL offensichtlich falsch (z.B. 500€ aber HABEN wäre 999€):
-             Den User SOFORT darauf hinweisen: "Position X hat SOLL=500€ — das stimmt nicht.
-             Soll ich SOLL auf [korrekter Betrag]€ korrigieren?"
-             → Auf Bestätigung warten, dann buche_zahlung mit korrektem soll_betrag UND haben_betrag aufrufen.
-  Schritt C: berechne_rvg aufrufen → RVG-Positionen werden automatisch angelegt
-  Schritt D: Brief-Entwurf mit RVG-Forderung direkt in den Chat (Schritt 1 des Brief-Ablaufs)
+  Schritt B: Für jede SCHADEN-Position (Reparatur, Mietwagen, SV-Honorar, Kostenpauschale):
+             SOLL mit Dokumenten vergleichen. Falls SOLL falsch → User fragen, korrigieren, buchen.
+             Nur ERHALTENE Zahlungen von der Versicherung buchen.
+             RVG-Positionen NIEMALS in diesem Schritt buchen (die sind noch OFFEN).
+  Schritt C: berechne_rvg aufrufen → neue RVG-Position wird erstellt (bleibt OFFEN, nicht buchen!)
+  Schritt D: Brief-Entwurf mit RVG-FORDERUNG direkt in den Chat:
+             "Wir fordern unsere Rechtsanwaltsgebühren in Höhe von [X€] bis [Datum]."
+             NICHT: "RVG ist in diesem Betrag enthalten" — das ist falsch!
   → ERST nach dem Brief-Entwurf stoppen und auf User-Bestätigung warten
 
 NIEMALS nach Schritt A, B oder C stoppen und auf weitere Anweisungen warten —
