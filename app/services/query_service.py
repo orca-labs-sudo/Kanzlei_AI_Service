@@ -1597,17 +1597,25 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
             fc = _find_fc(response)
 
             if fc is None:
-                # Einmaliger Retry: Gemini hat Text statt Tool-Call geliefert
+                # Einmaliger Retry mit mode=ANY — zwingt Gemini einen Tool-Call zu machen
                 if not _nudge_done:
                     _nudge_done = True
                     contents.append(response.candidates[0].content)  # type: ignore[union-attr]
                     contents.append(genai_types.Content(
                         role="user",
-                        parts=[genai_types.Part(text="Führe die Aktionen jetzt sofort durch. Starte direkt mit dem ersten Tool-Call ohne weiteren Text.")]
+                        parts=[genai_types.Part(text="Führe jetzt den ersten Schritt aus.")]
                     ))
+                    forced_config = genai_types.GenerateContentConfig(
+                        tools=tools,
+                        system_instruction=system_prompt,
+                        thinking_config=genai_types.ThinkingConfig(include_thoughts=False),
+                        tool_config=genai_types.ToolConfig(
+                            function_calling_config=genai_types.FunctionCallingConfig(mode="ANY")
+                        ),
+                    )
                     try:
                         response = await gemini.client.aio.models.generate_content(
-                            model=gemini.model_name, contents=contents, config=config,
+                            model=gemini.model_name, contents=contents, config=forced_config,
                         )
                     except Exception as e:
                         err_str = str(e)
