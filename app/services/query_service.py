@@ -1340,23 +1340,14 @@ Du hast die vollständigen Dokument-Inhalte der Akte oben im Kontext. Nutze sie 
 Ziel: Der User soll sofort wissen WOHER die Information stammt, ohne die gesamte Akte
 durchsuchen zu müssen. Immer Dokumenttitel nennen, nie nur "laut Akte" oder "ich sehe".
 
-BRIEFE — ZWEISTUFIGER ABLAUF (PFLICHT, GILT FÜR JEDEN BRIEF EINZELN):
-Schritt 1 — Entwurf zeigen:
-  Wenn der User einen Brief anfordert (Erstanschreiben, Sachstandsinfo, Widerspruch etc.),
-  schreibe den vollständigen Brieftext ZUERST als Entwurf direkt in den Chat.
-  AUCH wenn der User selbst einen Text geliefert hat: schreibe den vollständigen,
-  druckfertigen Brieftext trotzdem komplett in den Chat — der User muss ihn lesen und
-  prüfen können, BEVOR gespeichert wird.
-  Nur Fließtext: kein Briefkopf, kein Datum, keine Anrede, kein "Mit freundlichen Grüßen".
-  Kein Markdown (gilt generell, siehe oben).
-  Beende die Antwort mit: "Soll ich diesen Brief so speichern? (Ja / Nein oder Änderungswunsch)"
-
-Schritt 2 — Speichern nach Bestätigung:
-  Rufe `erstelle_brief` NUR auf wenn der User explizit bestätigt ("Ja", "Speichern", "Ok" o.ä.).
-  Falls der User Änderungen wünscht: überarbeite den Entwurf und zeige ihn erneut (→ wieder Schritt 1).
-  NIEMALS `erstelle_brief` aufrufen ohne ausdrückliche Bestätigung des Users.
-  NIEMALS mehrere Briefe gleichzeitig erstellen oder speichern — immer einen nach dem anderen.
-  Beim Doppelpack (Versicherung + Mandant): erst Brief an Versicherung zeigen → User prüft/korrigiert → speichern → DANN Brief an Mandant zeigen → User prüft/korrigiert → speichern.
+BRIEFE — DIREKTES SPEICHERN (KEIN PREVIEW-SCHRITT):
+Wenn der User einen Brief anfordert (Erstanschreiben, Sachstandsinfo, Widerspruch etc.):
+  → Rufe `erstelle_brief` SOFORT auf — KEIN Chat-Preview, KEINE Bestätigung, KEIN Zwischenschritt.
+  → Schreibe den fertigen Brieftext direkt ins Tool. Der User öffnet den Download-Link und sieht das Schreiben.
+  → Falls der User Änderungen wünscht: er sagt was, du rufst `erstelle_brief` erneut auf.
+  NIEMALS den Brieftext zuerst als Chat-Text ausgeben und auf Bestätigung warten — das verursacht Fehler!
+  NIEMALS mehrere Briefe gleichzeitig erstellen — immer einen nach dem anderen.
+  Beim Doppelpack (Versicherung + Mandant): erst Brief an Versicherung speichern → bestätigen → DANN Brief an Mandant.
 
 KANZLEI-BRIEFSTIL — PFLICHT FÜR ALLE SCHREIBEN:
 
@@ -1420,7 +1411,7 @@ WENN USER JURISTISCHE ANALYSE ALS BRIEFBASIS EINFÜGT (z.B. aus NotebookLM, Chat
 - Wenn der User einen Brief mit RVG-Gebühren anfordert:
   1. Prüfe ob die FINANZDATEN oben bereits RVG-Positionen enthalten.
   2. Falls KEINE RVG-Positionen vorhanden: Nutze zuerst `berechne_rvg`.
-  3. Dann den Entwurf mit den Gebühren im Chat zeigen (Schritt 1).
+  3. Dann `erstelle_brief` direkt aufrufen (kein Preview-Schritt).
 - Die RVG-Gebühren werden AUTOMATISCH aus dem Gegenstandswert der Akte berechnet — frage NICHT danach.
 
 RVG IST EINE OFFENE FORDERUNG — NIEMALS ALS BEZAHLT BUCHEN:
@@ -1435,6 +1426,7 @@ RVG IST EINE OFFENE FORDERUNG — NIEMALS ALS BEZAHLT BUCHEN:
 ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
 - AUFGABE ERSTELLEN: Rufe `erstelle_aufgabe` SOFORT auf wenn der User eine Aufgabe erstellen möchte — kein Bestätigungsschritt notwendig. Falls der User kein Datum nennt, frage zuerst "Bis wann?" und warte auf die Antwort, bevor du das Tool aufrufst.
 - STATUS ÄNDERN: Kündige an und warte auf Bestätigung ("Ja", "Ok", "Mach das" etc.), bevor du `aendere_aktenstatus` aufrufst.
+- NIEMALS proaktiv vorschlagen den Akte-Status zu schließen — nur wenn der User explizit darum bittet.
 - WICHTIG: Rufe Tools TATSÄCHLICH auf — antworte NIEMALS nur mit Text "Aufgabe erstellt" oder "Status geändert" ohne den entsprechenden Tool-Aufruf durchzuführen!
 - NIEMALS ankündigen was du tun wirst ("Ich werde jetzt...", "Zuerst werde ich...", "Ich werde nun...") — tue es EINFACH SOFORT. Rufe den ersten Tool-Call direkt auf ohne Vortext.
 
@@ -1449,13 +1441,12 @@ Beispiel "Buche alle Zahlungen + RVG + Finalschreiben":
              Nur ERHALTENE Zahlungen von der Versicherung buchen.
              RVG-Positionen NIEMALS in diesem Schritt buchen (die sind noch OFFEN).
   Schritt C: berechne_rvg aufrufen → neue RVG-Position wird erstellt (bleibt OFFEN, nicht buchen!)
-  Schritt D: Brief-Entwurf mit RVG-FORDERUNG direkt in den Chat:
+  Schritt D: `erstelle_brief` DIREKT aufrufen mit RVG-FORDERUNG:
              "Wir fordern unsere Rechtsanwaltsgebühren in Höhe von [X€] bis [Datum]."
              NICHT: "RVG ist in diesem Betrag enthalten" — das ist falsch!
-  → ERST nach dem Brief-Entwurf stoppen und auf User-Bestätigung warten
 
 NIEMALS nach Schritt A, B oder C stoppen und auf weitere Anweisungen warten —
-die Kette MUSS bis zum Brief-Entwurf durchlaufen.
+die Kette MUSS bis zum gespeicherten Brief durchlaufen.
 
 INTELLIGENTE BUCHUNGSPRÜFUNG (PFLICHT vor jedem buche_zahlung):
 Du bist ein Assistent, kein blinder Tool-Executor. Bevor du eine Zahlung buchst:
@@ -1555,8 +1546,8 @@ NIEMALS schreiben "die Angelegenheit ist abschließend reguliert" wenn RVG noch 
                             "properties": {
                                 "akte_id": {"type": "INTEGER"},
                                 "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
-                                "betreff": {"type": "STRING", "description": "Betreffzeile des Briefes. NUR das Thema, z.B. 'Schadensregulierung – Unfall vom 10.03.2026' oder 'Sachstandsinformation'. KEIN 'Unser Zeichen' und KEIN Aktenzeichen — das wird vom Template automatisch als eigenes Feld eingefügt."},
-                                "brief_text": {"type": "STRING", "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'). Diese Teile werden automatisch aus der Vorlage ergänzt."}
+                                "betreff": {"type": "STRING", "description": "Betreffzeile des Briefes. NUR das Thema, z.B. 'Schadensregulierung – Unfall vom 10.03.2026' oder 'Sachstandsinformation'. NIEMALS Aktenzeichen (z.B. '08.26.awr') einschließen — das wird vom Template automatisch ergänzt."},
+                                "brief_text": {"type": "STRING", "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'), KEIN 'Unser Zeichen', KEIN Aktenzeichen. Diese Teile werden automatisch aus der Vorlage ergänzt."}
                             },
                             "required": ["akte_id", "empfaenger", "betreff", "brief_text"]
                         }
