@@ -1048,6 +1048,14 @@ class QueryService:
                     )
                     return _safe_json(resp)
 
+                elif tool_name == "deaktiviere_zahlungsposition":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/deaktiviere_zahlungsposition/",
+                        json={"zahlungsposition_id": args["zahlungsposition_id"]},
+                        headers=headers
+                    )
+                    return _safe_json(resp)
+
                 elif tool_name == "buche_zahlung":
                     resp = await client.post(
                         f"{self.django_base}/api/ai/actions/buche_zahlung/",
@@ -1429,6 +1437,15 @@ Phase 3 — User fügt die Analyse bei dir ein:
   3. Dann den Brief-Entwurf im Chat zeigen und auf Bestätigung warten (Schritt 1).
 - Die RVG-Gebühren werden AUTOMATISCH aus dem Gegenstandswert der Akte berechnet — frage NICHT danach.
 
+SCHÄTZPOSITION DURCH TATSÄCHLICHE RECHNUNG ERSETZEN:
+Wenn eine Position auf einem SV-Gutachten/Schätzung basiert und eine tatsächliche Rechnung
+(Werkstatt, SV-Honorar, etc.) einen anderen Betrag hat:
+  Schritt 1: alte Schätzposition deaktivieren → `deaktiviere_zahlungsposition` (wird nicht mehr mitgerechnet)
+  Schritt 2: neue Position mit tatsächlichem Betrag anlegen → `erstelle_zahlungspositionen`
+  Schritt 3: neue Position buchen → `buche_zahlung`
+NIEMALS den SOLL-Betrag einer alten Position ändern wenn sie durch eine neue ersetzt wird —
+deaktivieren ist sauberer und erhält die Übersicht.
+
 RVG IST EINE OFFENE FORDERUNG — NIEMALS ALS BEZAHLT BUCHEN:
 - `berechne_rvg` erstellt DREI getrennte Zahlungspositionen (1,3 Geschäftsgebühr + Auslagenpauschale + 19% USt).
 - NIEMALS RVG-Positionen über `erstelle_zahlungspositionen` anlegen — immer `berechne_rvg` nutzen!
@@ -1623,6 +1640,22 @@ NIEMALS schreiben "die Angelegenheit ist abschließend reguliert" wenn RVG noch 
                                 "soll_betrag": {"type": "NUMBER", "description": "Optional: korrigierter SOLL-Betrag falls der aktuelle SOLL-Wert falsch ist"},
                             },
                             "required": ["zahlungsposition_id", "haben_betrag"]
+                        }
+                    },
+                    {
+                        "name": "deaktiviere_zahlungsposition",
+                        "description": (
+                            "Eine Zahlungsposition deaktivieren (wird aus Gegenstandswert und Saldo rausgerechnet). "
+                            "Nutze dies wenn eine alte Schätzposition (z.B. 'Reparaturkosten netto' aus SV-Gutachten) "
+                            "durch eine neue tatsächliche Rechnung ersetzt wird. "
+                            "Ablauf: 1. alte Position deaktivieren → 2. neue Position anlegen (erstelle_zahlungspositionen) → 3. buchen."
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "zahlungsposition_id": {"type": "INTEGER", "description": "ID der zu deaktivierenden Position aus den FINANZDATEN (Feld 'id')"},
+                            },
+                            "required": ["zahlungsposition_id"]
                         }
                     }
                 ]
