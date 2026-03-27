@@ -1597,8 +1597,8 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
             fc = _find_fc(response)
 
             if fc is None:
-                # Einmaliger Retry mit mode=ANY — zwingt Gemini einen Tool-Call zu machen
-                if not _nudge_done:
+                # Einmaliger Retry mit mode=ANY — NUR wenn noch keine Tool-Calls gelaufen sind
+                if not _nudge_done and not actions_taken:
                     _nudge_done = True
                     contents.append(response.candidates[0].content)  # type: ignore[union-attr]
                     contents.append(genai_types.Content(
@@ -1650,7 +1650,6 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
                 if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
                     return {"reply": "⏳ Gemini API Tageslimit erreicht. Bitte in einigen Minuten erneut versuchen.", "actions_taken": actions_taken}
                 raise
-            _nudge_done = False  # Nach erfolgreichem Tool-Call Retry-Flag zurücksetzen
 
         try:
             reply_text = response.text if response.candidates else "Keine Antwort von KI."
