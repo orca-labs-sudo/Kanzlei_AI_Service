@@ -1424,8 +1424,9 @@ WENN USER JURISTISCHE ANALYSE ALS BRIEFBASIS EINFÜGT (z.B. aus NotebookLM, Chat
 - Die RVG-Gebühren werden AUTOMATISCH aus dem Gegenstandswert der Akte berechnet — frage NICHT danach.
 
 RVG IST EINE OFFENE FORDERUNG — NIEMALS ALS BEZAHLT BUCHEN:
-- `berechne_rvg` erstellt eine neue Zahlungsposition für die Anwaltsgebühren.
-- Diese Position ist OFFEN — die Versicherung hat die RVG noch NICHT bezahlt.
+- `berechne_rvg` erstellt DREI getrennte Zahlungspositionen (1,3 Geschäftsgebühr + Auslagenpauschale + 19% USt).
+- NIEMALS RVG-Positionen über `erstelle_zahlungspositionen` anlegen — immer `berechne_rvg` nutzen!
+- Diese Positionen sind OFFEN — die Versicherung hat die RVG noch NICHT bezahlt.
 - NIEMALS `buche_zahlung` für eine RVG-Position aufrufen die gerade erst erstellt wurde.
 - "buche alles passend" bedeutet: buche die vom Versicherung ERHALTENEN Zahlungen für Schaden.
   RVG wird erst gebucht wenn die Versicherung die Gebühren tatsächlich überweist.
@@ -1576,7 +1577,7 @@ NIEMALS schreiben "die Angelegenheit ist abschließend reguliert" wenn RVG noch 
                     },
                     {
                         "name": "erstelle_zahlungspositionen",
-                        "description": "Zahlungspositionen (Forderungen) in den Finanzen der Akte anlegen. Nutze dies wenn der User Beträge eintragen möchte, z.B. Gutachten, Kostenpauschale, Reparaturkosten, Sachverständigengebühren.",
+                        "description": "Zahlungspositionen (Forderungen) in den Finanzen der Akte anlegen. Nutze dies für Schaden-Positionen: Gutachten, Kostenpauschale, Reparaturkosten, Sachverständigengebühren. NICHT für RVG-Gebühren — dafür gibt es `berechne_rvg`.",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
@@ -1588,7 +1589,7 @@ NIEMALS schreiben "die Angelegenheit ist abschließend reguliert" wenn RVG noch 
                                         "properties": {
                                             "beschreibung": {"type": "STRING", "description": "Bezeichnung der Position, z.B. 'Kostenpauschale', 'Schadensgutachten (netto)'"},
                                             "soll_betrag": {"type": "NUMBER", "description": "Betrag in Euro (Forderung)"},
-                                            "category": {"type": "STRING", "description": "Kategorie: Gutachten | SV-Kosten | Reparatur | Mietfahrzeug | Schmerzensgeld | Kostenpauschale | RVG | Sonstiges"}
+                                            "category": {"type": "STRING", "description": "Kategorie: Gutachten | SV-Kosten | Reparatur | Mietfahrzeug | Schmerzensgeld | Kostenpauschale | Sonstiges (NIEMALS RVG — dafür berechne_rvg nutzen!)"}
                                         },
                                         "required": ["beschreibung", "soll_betrag", "category"]
                                     },
