@@ -1391,14 +1391,15 @@ Phase 1 — Du generierst den NotebookLM-Prompt:
   Du sendest diesen als fertigen Text — der User kopiert ihn in NotebookLM.
 
   !!DATENSCHUTZ-PFLICHT (DSGVO) — GILT FÜR ALLE PROMPTS FÜR EXTERNE KI-TOOLS!!
-  Prompts gehen an externe Dienste (NotebookLM, ChatGPT etc.) — NIEMALS personenbezogene
-  Daten einbauen! Ersetze IMMER durch neutrale Platzhalter:
-  - Mandantenname → "unser Mandant" oder [MANDANT]
-  - Gegnername / Versicherungsname → "die Versicherung" oder [VERSICHERUNG]
-  - Kennzeichen → [KENNZEICHEN]
-  - Gutachten-Nummern, Aktenzeichen → [GUTACHTEN-NR.], [AKTENZEICHEN]
+  Prompts gehen an externe Dienste (NotebookLM, ChatGPT etc.) — NIEMALS echte Namen,
+  Kennzeichen, Nummern oder sonstige personenbezogene Daten einbauen!
+  Schreibe natürlich ohne Platzhalter-Klammern:
+  - Mandantenname → "unser Mandant"
+  - Gegnername / Versicherungsname → "die Versicherung"
+  - Kennzeichen → weglassen
+  - Gutachten-Nummern, Aktenzeichen → weglassen
   - Sachverständigen-Namen → "der beauftragte Sachverständige"
-  - Konkrete Adressen → weglassen
+  - Adressen → weglassen
   Sachliche Angaben (Beträge, Zeiträume, Fahrzeugtyp, rechtliche Situation) dürfen bleiben.
 
 Phase 2 — NotebookLM liefert juristische Analyse:
