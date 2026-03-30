@@ -1588,7 +1588,7 @@ NIEMALS schreiben "die Angelegenheit ist abschließend reguliert" wenn RVG noch 
                                 "akte_id": {"type": "INTEGER"},
                                 "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
                                 "betreff": {"type": "STRING", "description": "Betreffzeile des Briefes. NUR das Thema, z.B. 'Schadensregulierung – Unfall vom 10.03.2026' oder 'Sachstandsinformation'. NIEMALS Aktenzeichen (z.B. '08.26.awr') einschließen — das wird vom Template automatisch ergänzt."},
-                                "brief_text": {"type": "STRING", "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'), KEIN 'Unser Zeichen', KEIN Aktenzeichen. Diese Teile werden automatisch aus der Vorlage ergänzt."}
+                                "brief_text": {"type": "STRING", "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'), KEIN 'Unser Zeichen', KEIN Aktenzeichen. Diese Teile werden automatisch aus der Vorlage ergänzt. FORMATIERUNG: Absätze und Listenpunkte mit doppelter Leerzeile (\\n\\n) trennen — einzelnes \\n wird zu Leerzeichen zusammengeführt."}
                             },
                             "required": ["akte_id", "empfaenger", "betreff", "brief_text"]
                         }
