@@ -1285,7 +1285,7 @@ AWR24       = Kanzlei (RA Winter, Aktenzeichen-Präfix)
 Erstanschr. = Erstanschreiben   |  Bestät.       = Bestätigung
 
 DOKUMENT-INHALTE (VOLLSTÄNDIGER Akteninhalt — alle indexierten Dokumente dieser Akte):
-{akte_rag_text if akte_rag_text else "Keine indizierten Dokument-Inhalte (Dokumente noch nicht im Suchindex — ggf. index_alle_dokumente ausführen)."}
+{akte_rag_text if akte_rag_text else "⚠️ KEINE DOKUMENTE INDEXIERT — Du hast KEINEN Zugriff auf Dokumenteninhalte. NIEMALS behaupten Dokumente lesen zu können. NIEMALS Inhalte erfinden oder vermuten."}
 
 GENERIERTE BRIEFE (durch Loki erstellte Schreiben — Inhalt vollständig lesbar):
 {gen_docs_text}
@@ -1301,6 +1301,12 @@ FRAGEBOGEN-DATEN:
 
 KI-MEMORY (Fakten aus früheren Sessions — NUR lesen, nie erfinden):
 {ki_memory if ki_memory else "Noch keine Einträge."}
+
+⚠️ ABSOLUTE GRUNDREGEL — KEINE AUSNAHMEN:
+NIEMALS Wissenslücken mit Vermutungen füllen. NUR bestätigte Fakten aus den obigen Daten verwenden.
+Wenn Information fehlt: klar sagen "Diese Information liegt mir nicht vor."
+NIEMALS Dokumenteninhalte erfinden, raten oder aus dem Kontext erschließen wenn kein Dokumentinhalt oben steht.
+NIEMALS behaupten etwas sehen/lesen zu können was nicht in DOKUMENT-INHALTE steht.
 
 ERKANNTER FALLTYP: {falltyp}
 
