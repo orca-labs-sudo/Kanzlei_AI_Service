@@ -963,6 +963,16 @@ class QueryService:
                     )
                     return _safe_json(resp)
 
+                elif tool_name == "get_statistiken":
+                    params = {"zeitraum": args.get("zeitraum", "dieser_monat")}
+                    if args.get("referent"):
+                        params["referent"] = args["referent"]
+                    resp = await client.get(
+                        f"{self.django_base}/api/ai/query/statistiken/",
+                        params=params, headers=headers
+                    )
+                    return _safe_json(resp)
+
                 elif tool_name == "berechne_rvg":
                     resp = await client.post(
                         f"{self.django_base}/api/ai/actions/berechne_rvg/",
@@ -1673,6 +1683,30 @@ NIEMALS schreiben "die Angelegenheit ist abschließend reguliert" wenn RVG noch 
                                 "zahlungsposition_id": {"type": "INTEGER", "description": "ID der zu deaktivierenden Position aus den FINANZDATEN (Feld 'id')"},
                             },
                             "required": ["zahlungsposition_id"]
+                        }
+                    },
+                    {
+                        "name": "get_statistiken",
+                        "description": (
+                            "Kanzleiweite Statistiken für einen Zeitraum abrufen: Akten angelegt/geschlossen, "
+                            "RVG-Gebühren berechnet, Zahlungseingänge, Fristen. "
+                            "Nutze dies bei Fragen wie 'Wie viele Akten wurden diesen Monat angelegt?', "
+                            "'Wie viel RVG haben wir diesen Monat generiert?', 'Was hat Alex diese Woche gemacht?'"
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "zeitraum": {
+                                    "type": "STRING",
+                                    "enum": ["dieser_monat", "letzter_monat", "dieses_jahr", "letzte_30_tage"],
+                                    "description": "Zeitraum der Auswertung (default: dieser_monat)"
+                                },
+                                "referent": {
+                                    "type": "STRING",
+                                    "description": "Optional: Sachbearbeiter-Name (Teilstring, z.B. 'Alex') zum Filtern"
+                                }
+                            },
+                            "required": []
                         }
                     }
                 ]
