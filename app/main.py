@@ -1001,22 +1001,78 @@ async def process_email_background_task(
 
         # ... (Mappings remain same) ...
 
-        # 3. Create Mandant
+        # 3. Create Mandant — Duplikatprüfung
+        job_tracker.update_step(job_id, 'mandant_creation', 'processing', 'Mandant wird geprüft...')
+        vorname = case_data.mandant.vorname or ""
+        nachname = case_data.mandant.nachname or ""
+
+        # Suche bestehende Mandanten mit gleichem Namen
+        search_resp = await django_client._get_request(f"cases/mandanten/?search={vorname}+{nachname}")
+        existing_mandanten = search_resp.get('results', search_resp) if isinstance(search_resp, dict) else search_resp
+        # Filter: gleicher Vor- UND Nachname (case-insensitive)
+        duplicates = [
+            m for m in (existing_mandanten if isinstance(existing_mandanten, list) else [])
+            if m.get('vorname', '').strip().lower() == vorname.strip().lower()
+            and m.get('nachname', '').strip().lower() == nachname.strip().lower()
+        ]
+
+        if duplicates:
+            # Job pausieren — User muss entscheiden
+            candidates = [{'id': m['id'], 'name': f"{m['vorname']} {m['nachname']}".strip(), 'email': m.get('email', '')} for m in duplicates]
+            pending_data = {
+                'case_data_json': case_data.model_dump() if hasattr(case_data, 'model_dump') else {},
+                'vorname': vorname,
+                'nachname': nachname,
+                'mandant_payload': {
+                    "vorname": vorname,
+                    "nachname": nachname,
+                    "strasse": case_data.mandant.adresse.strasse or "",
+                    "hausnummer": case_data.mandant.adresse.hausnummer or "",
+                    "plz": case_data.mandant.adresse.plz or "",
+                    "stadt": case_data.mandant.adresse.ort or "",
+                    "email": case_data.mandant.email or "",
+                    "telefon": case_data.mandant.telefon or "",
+                    "ignore_conflicts": True
+                },
+                'gegner_name': (case_data.gegner_versicherung.name or "Unbekannte Versicherung"),
+                'gegner_adresse': {
+                    'strasse': case_data.gegner_versicherung.adresse.strasse if case_data.gegner_versicherung.adresse else "",
+                    'hausnummer': case_data.gegner_versicherung.adresse.hausnummer if case_data.gegner_versicherung.adresse else "",
+                    'plz': case_data.gegner_versicherung.adresse.plz if case_data.gegner_versicherung.adresse else "",
+                    'stadt': case_data.gegner_versicherung.adresse.ort if case_data.gegner_versicherung.adresse else "",
+                },
+                'kfz_mandant': case_data.unfall.kennzeichen_mandant or "",
+                'kfz_gegner': case_data.unfall.kennzeichen_gegner or "",
+                'unfalldatum': case_data.unfall.datum or "",
+                'unfallort': case_data.unfall.ort or "",
+                'betreff': case_data.betreff or "",
+                'zusammenfassung': case_data.zusammenfassung or "",
+                'versicherungsnummer': case_data.gegner_versicherung.schadennummer or "",
+            }
+            job_tracker.conflict_job(
+                job_id,
+                conflict_type='mandant_duplicate',
+                conflict_message=f"Mandant '{vorname} {nachname}' existiert bereits in der Datenbank.",
+                pending_data=pending_data,
+                candidates=candidates
+            )
+            logger.info(f"Job {job_id}: Mandant-Duplikat gefunden — Job pausiert")
+            return  # Warten auf User-Entscheidung
+
         mandant_payload = {
-            "vorname": case_data.mandant.vorname or "",
-            "nachname": case_data.mandant.nachname or "",
-            # ansprache removed - backend uses default "Herr"
+            "vorname": vorname,
+            "nachname": nachname,
             "strasse": case_data.mandant.adresse.strasse or "",
             "hausnummer": case_data.mandant.adresse.hausnummer or "",
             "plz": case_data.mandant.adresse.plz or "",
             "stadt": case_data.mandant.adresse.ort or "",
             "email": case_data.mandant.email or "",
             "telefon": case_data.mandant.telefon or "",
-            "ignore_conflicts": True 
+            "ignore_conflicts": True
         }
         mandant_resp = await django_client.create_mandant(mandant_payload)
         mandant_id = mandant_resp['mandant_id']
-        mandant_name = mandant_resp.get('name') or f"{case_data.mandant.vorname} {case_data.mandant.nachname}".strip()
+        mandant_name = mandant_resp.get('name') or f"{vorname} {nachname}".strip()
         logger.info(f"Job {job_id}: Created Mandant {mandant_id} ({mandant_name})")
         job_tracker.update_step(job_id, 'mandant_creation', 'completed', mandant_name)
         job_tracker.update_step(job_id, 'akte_creation', 'processing', 'Akte wird erstellt...')
@@ -1219,12 +1275,103 @@ async def create_akte_from_email(
 async def get_job_status(job_id: str):
     """
     Gibt den aktuellen Status eines Akte-Erstellungs-Jobs zurück.
-    Felder: status (processing|completed|failed), current_step, steps, akte_id, aktenzeichen, error
+    Felder: status (processing|completed|failed|conflict), current_step, steps, akte_id, aktenzeichen, error
     """
     job = job_tracker.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     return job
+
+
+@app.post("/api/akte/resolve-conflict/{job_id}", dependencies=[Depends(verify_hmac)])
+async def resolve_conflict(job_id: str, decision: dict):
+    """
+    Löst einen pausierten Job-Konflikt auf.
+    decision: { "action": "use_existing"|"create_new"|"abort", "existing_id": int (optional) }
+    """
+    job = job_tracker.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get('status') != 'conflict':
+        raise HTTPException(status_code=400, detail="Job is not in conflict state")
+
+    action = decision.get('action')
+    if action == 'abort':
+        job_tracker.fail_job(job_id, 'Vom Benutzer abgebrochen.')
+        return {"status": "aborted"}
+
+    # Pending-Daten holen und Job fortsetzen
+    pending = job_tracker.resume_job(job_id)
+    existing_mandant_id = decision.get('existing_id') if action == 'use_existing' else None
+
+    import asyncio
+    asyncio.create_task(_resume_akte_job(job_id, pending, existing_mandant_id))
+    return {"status": "resumed"}
+
+
+async def _resume_akte_job(job_id: str, pending: dict, existing_mandant_id: int = None):
+    """Setzt die Akte-Erstellung nach Konfliktauflösung fort."""
+    try:
+        job_tracker.update_step(job_id, 'mandant_creation', 'processing', 'Mandant wird verarbeitet...')
+
+        if existing_mandant_id:
+            mandant_id = existing_mandant_id
+            logger.info(f"Job {job_id}: Bestehenden Mandant verwendet: {mandant_id}")
+        else:
+            # Neu anlegen
+            mandant_payload = pending['mandant_payload']
+            mandant_resp = await django_client.create_mandant(mandant_payload)
+            mandant_id = mandant_resp['mandant_id']
+            logger.info(f"Job {job_id}: Neuer Mandant angelegt: {mandant_id}")
+
+        job_tracker.update_step(job_id, 'mandant_creation', 'completed', f"Mandant ID {mandant_id}")
+        job_tracker.update_step(job_id, 'akte_creation', 'processing', 'Gegner wird gesucht...')
+
+        # Gegner
+        gegner_name = pending.get('gegner_name', 'Unbekannte Versicherung')
+        adr = pending.get('gegner_adresse', {})
+        gegner_payload = {
+            "name": gegner_name,
+            "strasse": adr.get('strasse', ''),
+            "hausnummer": adr.get('hausnummer', ''),
+            "plz": adr.get('plz', ''),
+            "stadt": adr.get('stadt', ''),
+            "ignore_conflicts": True
+        }
+        gegner_resp = await django_client.lookup_or_create_gegner(gegner_payload)
+        gegner_id = gegner_resp['gegner_id']
+        logger.info(f"Job {job_id}: Gegner aufgelöst: {gegner_id}")
+
+        # Akte anlegen
+        akte_payload = {
+            "mandant": mandant_id,
+            "gegner": gegner_id,
+            "info_zusatz": {
+                "betreff": pending.get('betreff', ''),
+                "unfalldatum": pending.get('unfalldatum', ''),
+                "unfallort": pending.get('unfallort', ''),
+                "kennzeichen_gegner": pending.get('kfz_gegner', ''),
+                "kennzeichen_mandant": pending.get('kfz_mandant', ''),
+                "versicherungsnummer": pending.get('versicherungsnummer', ''),
+                "zusammenfassung": pending.get('zusammenfassung', '')
+            },
+            "fragebogen_data": {
+                "kfz_kennzeichen": pending.get('kfz_mandant', ''),
+                "gegner_kfz": pending.get('kfz_gegner', ''),
+                "datum_zeit": pending.get('unfalldatum', ''),
+                "unfallort": pending.get('unfallort', ''),
+            },
+            "ignore_conflicts": True
+        }
+        akte_resp = await django_client.create_akte(akte_payload)
+        akte_id = akte_resp['akte_id']
+        aktenzeichen = akte_resp.get('aktenzeichen', '')
+        logger.info(f"Job {job_id}: Akte angelegt: {akte_id} ({aktenzeichen})")
+
+        job_tracker.complete_job(job_id, akte_id, aktenzeichen)
+    except Exception as e:
+        logger.error(f"Job {job_id}: Fehler beim Fortsetzen: {e}", exc_info=True)
+        job_tracker.fail_job(job_id, str(e))
 
 
 class QueryRequest(BaseModel):

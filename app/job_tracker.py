@@ -60,5 +60,29 @@ class JobTracker:
         """Get job status"""
         return self.jobs.get(job_id)
 
+    def conflict_job(self, job_id: str, conflict_type: str, conflict_message: str, pending_data: dict, candidates: list = None):
+        """Pause job waiting for user conflict resolution."""
+        if job_id not in self.jobs:
+            return
+        self.jobs[job_id]['status'] = 'conflict'
+        self.jobs[job_id]['conflict_type'] = conflict_type      # "mandant_duplicate" | "kfz_collision"
+        self.jobs[job_id]['conflict_message'] = conflict_message
+        self.jobs[job_id]['pending_data'] = pending_data        # data to resume with
+        if candidates:
+            self.jobs[job_id]['candidates'] = candidates        # list of {id, name} for mandant_duplicate
+        self.jobs[job_id]['updated_at'] = datetime.utcnow().isoformat()
+
+    def resume_job(self, job_id: str) -> dict:
+        """Get pending_data and reset status to processing for resume."""
+        if job_id not in self.jobs:
+            return {}
+        pending = self.jobs[job_id].pop('pending_data', {})
+        self.jobs[job_id]['status'] = 'processing'
+        self.jobs[job_id].pop('conflict_type', None)
+        self.jobs[job_id].pop('conflict_message', None)
+        self.jobs[job_id].pop('candidates', None)
+        self.jobs[job_id]['updated_at'] = datetime.utcnow().isoformat()
+        return pending
+
 # Global instance
 job_tracker = JobTracker()

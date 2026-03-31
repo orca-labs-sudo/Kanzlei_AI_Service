@@ -20,6 +20,26 @@ class DjangoClient:
         }
         self.timeout = 30.0
 
+    async def _get_request(self, endpoint: str) -> Any:
+        """Generic GET request handler"""
+        url = f"{self.base_url}/api/{endpoint}" if not endpoint.startswith('http') else endpoint
+
+        from app.services.hmac_auth import generate_ki_signature
+        req_headers = {k: v for k, v in self.headers.items() if k != 'Content-Type'}
+        req_headers["X-KI-Signature"] = generate_ki_signature()
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            try:
+                response = await client.get(url, headers=req_headers)
+                response.raise_for_status()
+                return response.json()
+            except httpx.HTTPStatusError as e:
+                logger.error(f"HTTP Error calling GET {endpoint}: {e.response.text}")
+                raise Exception(f"Backend API Error: {e.response.text}")
+            except httpx.RequestError as e:
+                logger.error(f"Connection Error calling GET {endpoint}: {str(e)}")
+                raise Exception(f"Backend Connection Error: {str(e)}")
+
     async def _post_request(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
         """Generic POST request handler"""
         url = f"{self.base_url}/api/ai/{endpoint}"
