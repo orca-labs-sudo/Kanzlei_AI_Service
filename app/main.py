@@ -1019,10 +1019,22 @@ async def process_email_background_task(
         if duplicates:
             # Job pausieren — User muss entscheiden
             candidates = [{'id': m['id'], 'name': f"{m['vorname']} {m['nachname']}".strip(), 'email': m.get('email', '')} for m in duplicates]
+            import base64
             pending_data = {
                 'case_data_json': case_data.model_dump() if hasattr(case_data, 'model_dump') else {},
                 'vorname': vorname,
                 'nachname': nachname,
+                'email_bytes_b64': base64.b64encode(email_content_bytes).decode('utf-8'),
+                'email_filename': filename or 'email.msg',
+                'email_subject': email_content.subject or '',
+                'email_attachments_b64': [
+                    {'filename': att.filename, 'content_b64': base64.b64encode(att.content).decode('utf-8')}
+                    for att in email_content.attachments
+                ],
+                'extra_attachments_b64': [
+                    {'filename': a['filename'], 'content_b64': base64.b64encode(a['content']).decode('utf-8')}
+                    for a in extra_attachments
+                ],
                 'mandant_payload': {
                     "vorname": vorname,
                     "nachname": nachname,
@@ -1368,7 +1380,51 @@ async def _resume_akte_job(job_id: str, pending: dict, existing_mandant_id: int 
         aktenzeichen = akte_resp.get('aktenzeichen', '')
         logger.info(f"Job {job_id}: Akte angelegt: {akte_id} ({aktenzeichen})")
 
+        job_tracker.update_step(job_id, 'akte_creation', 'completed', aktenzeichen or 'Akte erstellt')
+        job_tracker.update_step(job_id, 'document_upload', 'processing', 'Dokumente werden hochgeladen...')
+
+        # Dokumente hochladen
+        import base64
+        email_bytes_b64 = pending.get('email_bytes_b64')
+        if email_bytes_b64:
+            email_bytes = base64.b64decode(email_bytes_b64)
+            email_filename = pending.get('email_filename', 'email.msg')
+            await django_client.upload_dokument(akte_id=akte_id, file_content=email_bytes, filename=email_filename, titel="Original E-Mail")
+            logger.info(f"Job {job_id}: Original E-Mail hochgeladen")
+
+        for att in pending.get('email_attachments_b64', []):
+            content = base64.b64decode(att['content_b64'])
+            await django_client.upload_dokument(akte_id=akte_id, file_content=content, filename=att['filename'], titel=att['filename'])
+            logger.info(f"Job {job_id}: Anhang hochgeladen: {att['filename']}")
+
+        for att in pending.get('extra_attachments_b64', []):
+            content = base64.b64decode(att['content_b64'])
+            await django_client.upload_dokument(akte_id=akte_id, file_content=content, filename=att['filename'], titel=att['filename'])
+            logger.info(f"Job {job_id}: Separater Anhang hochgeladen: {att['filename']}")
+
+        job_tracker.update_step(job_id, 'document_upload', 'completed', 'Dokumente hochgeladen')
+        job_tracker.update_step(job_id, 'ticket_creation', 'processing', 'Ticket wird erstellt...')
+
+        # Ticket erstellen
+        import datetime
+        email_subject = pending.get('email_subject', '')
+        mandant_name = f"{pending.get('vorname', '')} {pending.get('nachname', '')}".strip()
+        ticket_payload = {
+            "akte": akte_id,
+            "titel": "KI: Neue Akte aus E-Mail",
+            "beschreibung": (
+                f"Automatisch angelegt aus E-Mail '{email_subject}'.\n"
+                f"Mandant: {mandant_name}\n"
+                f"Bitte Daten prüfen und vervollständigen."
+            ),
+            "faellig_am": datetime.date.today().isoformat()
+        }
+        await django_client.create_ticket(ticket_payload)
+        logger.info(f"Job {job_id}: Ticket erstellt")
+        job_tracker.update_step(job_id, 'ticket_creation', 'completed', 'Ticket erstellt')
+
         job_tracker.complete_job(job_id, akte_id, aktenzeichen)
+        logger.info(f"Job {job_id}: Abgeschlossen")
     except Exception as e:
         logger.error(f"Job {job_id}: Fehler beim Fortsetzen: {e}", exc_info=True)
         job_tracker.fail_job(job_id, str(e))
