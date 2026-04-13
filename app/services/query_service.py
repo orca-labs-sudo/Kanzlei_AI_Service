@@ -1585,7 +1585,7 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                     },
                     {
                         "name": "berechne_rvg",
-                        "description": "RVG-Gebühren berechnen UND das RVG-Abschlussschreiben direkt erstellen. Das Backend generiert den Brief automatisch mit Standardvorlage — KEIN anschließender erstelle_brief-Aufruf nötig! Nach diesem Tool-Aufruf einfach dem User bestätigen dass RVG berechnet und Brief erstellt wurde.",
+                        "description": "RVG-Gebühren berechnen UND das RVG-Abschlussschreiben direkt erstellen. Das Backend generiert den Brief automatisch mit Standardvorlage — KEIN anschließender erstelle_brief-Aufruf nötig! IMMER aufrufen wenn der User ein RVG-Schreiben anfordert — auch wenn es bereits existiert, da der User einen neuen Brief erzeugen möchte. Nach diesem Tool-Aufruf einfach dem User bestätigen dass der Brief erstellt wurde.",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
