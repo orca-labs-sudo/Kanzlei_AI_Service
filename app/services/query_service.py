@@ -1521,15 +1521,11 @@ Du bist ein Assistent, kein blinder Tool-Executor. Bevor du eine Zahlung buchst:
 - `buche_zahlung` hat optionalen Parameter `soll_betrag` — nutze ihn wenn SOLL korrigiert werden muss.
 - Nenne IMMER das konkrete Dokument das den abweichenden Betrag belegt.
 
-FINALSCHREIBEN AN VERSICHERUNG (nach vollständiger Schadensregulierung):
-Ein "Finalschreiben" bedeutet NICHT "Wir bestätigen alles ist bezahlt".
-Es bedeutet: Schaden reguliert + RVG-Forderung noch offen.
-Aufbau:
-  1. Kurze Bestätigung: Schadensregulierung wurde erhalten / die Hauptpositionen sind beglichen.
-  2. RVG-Forderung: "Wir berechnen unsere Rechtsanwaltsgebühren gemäß RVG in Höhe von [X€]
-     und bitten um Überweisung bis [Datum in 14 Tagen]."
-  3. Klagandrohung falls nicht gezahlt.
-NIEMALS schreiben "die Angelegenheit ist abschließend reguliert" wenn RVG noch offen ist.
+FINALSCHREIBEN / RVG-ABSCHLUSSSCHREIBEN AN VERSICHERUNG:
+Nach berechne_rvg gibt das System ein fertiges Feld `brief_text_vorlage` und `betreff_vorlage` zurück.
+PFLICHT: Verwende diese Felder EXAKT 1:1 als `brief_text` und `betreff` in erstelle_brief.
+KEINERLEI Umformulierungen, Ergänzungen oder Kürzungen — der Text ist rechtlich geprüft und fix.
+Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User fragen.
 """
 
         tools = [
