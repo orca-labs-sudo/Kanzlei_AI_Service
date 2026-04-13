@@ -1585,7 +1585,7 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                     },
                     {
                         "name": "berechne_rvg",
-                        "description": "RVG-Gebühren für die Akte automatisch berechnen und als Zahlungspositionen speichern. Nutze dies wenn der User einen Brief mit RVG-Gebühren anfordert und die Finanzdaten noch keine RVG-Positionen enthalten.",
+                        "description": "RVG-Gebühren berechnen UND das RVG-Abschlussschreiben direkt erstellen. Das Backend generiert den Brief automatisch mit Standardvorlage — KEIN anschließender erstelle_brief-Aufruf nötig! Nach diesem Tool-Aufruf einfach dem User bestätigen dass RVG berechnet und Brief erstellt wurde.",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
