@@ -1271,6 +1271,26 @@ class QueryService:
         from datetime import datetime as _dt
         heute_str = _dt.now().strftime("%d.%m.%Y")
 
+        # RAG: Goldstandard-Briefe aus kanzlei_wissen als Stilvorlagen laden
+        goldstandard_text = ""
+        try:
+            from app.services.rag_store import rag_store as _rag  # type: ignore[attr-defined]
+            gs_query = f"Erstanschreiben Versicherung Widerspruch Forderung Kanzlei {falltyp.replace('_', ' ')}"
+            gs_matches = await _rag.search_similar(gs_query, n_results=3, collection_name="kanzlei_wissen")
+            if gs_matches:
+                gs_parts = []
+                for i, m in enumerate(gs_matches, 1):
+                    text = m.get("text", "").strip()
+                    meta = m.get("metadata", {})
+                    typ = meta.get("typ", "")
+                    betreff = meta.get("betreff", "")
+                    label = f"Beispiel {i}" + (f" [{typ}]" if typ else "") + (f" — {betreff}" if betreff else "")
+                    gs_parts.append(f"--- {label} ---\n{text}")
+                goldstandard_text = "\n\n".join(gs_parts)
+                logger.info(f"handle_akte_chat: {len(gs_matches)} Goldstandard-Briefe als Stilvorlagen geladen.")
+        except Exception as _gs_err:
+            logger.warning(f"Goldstandard-Ladung fehlgeschlagen (nicht kritisch): {_gs_err}")
+
         # RAG: ALLE Dokument-Inhalte dieser Akte laden — vollständig, wie Anwalt der Akte liest
         akte_rag_text = ""
         try:
@@ -1417,6 +1437,9 @@ Schritt 2 — Speichern nach Bestätigung:
   NIEMALS `erstelle_brief` aufrufen ohne ausdrückliche Bestätigung des Users.
   NIEMALS mehrere Briefe gleichzeitig erstellen — immer einen nach dem anderen.
   Beim Doppelpack: erst Versicherungsbrief zeigen → bestätigen → speichern → dann Mandantenbrief zeigen → bestätigen → speichern.
+
+STILVORLAGEN — ECHTE KANZLEI-BRIEFE (zur Orientierung für Ton, Länge, Struktur):
+{goldstandard_text if goldstandard_text else "Keine Vorlagen verfügbar — orientiere dich am Briefstil unten."}
 
 KANZLEI-BRIEFSTIL — PFLICHT FÜR ALLE SCHREIBEN:
 
@@ -1841,7 +1864,7 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
             tools=tools,
             system_instruction=system_prompt,
             thinking_config=genai_types.ThinkingConfig(include_thoughts=False),
-            temperature=0,  # Deterministisch — Gemini soll System-Prompt-Regeln strikt folgen
+            temperature=0.7,  # Kreativität für Briefformulierungen; Regeln durch System-Prompt durchgesetzt
         )
 
         # Gemini aufrufen mit Function Calling
