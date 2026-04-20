@@ -980,6 +980,13 @@ class QueryService:
                     )
                     return _safe_json(resp)
 
+                elif tool_name == "entwerfe_brief":
+                    stage2 = await self._generate_brief_stage2(
+                        akte_id=args["akte_id"],
+                        payload=args,
+                    )
+                    return stage2
+
                 elif tool_name == "erstelle_brief":
                     resp = await client.post(
                         f"{self.django_base}/api/ai/actions/erstelle_brief/",
@@ -1189,6 +1196,279 @@ class QueryService:
             logger.warning(f"_lade_workflow_kontext Fehler ({falltyp}): {e}")
             return ""
 
+    async def _search_goldstandard_fuer_brief(
+        self,
+        brief_zweck: str,
+        empfaenger: str,
+        argumente: list,
+        n_results: int = 5,
+    ) -> list:
+        """
+        Dynamischer RAG-Query für Stage-2-Stilvorlagen.
+        Baut Query aus brief_zweck + empfaenger + Top-Argument-Thesen.
+        Nutzt where-Filter wenn möglich, fällt auf breitere Suche zurück wenn < 3 Treffer.
+        """
+        from app.services.rag_store import rag_store
+        query_parts = [brief_zweck.replace("_", " "), empfaenger]
+        for a in (argumente or [])[:2]:
+            these = a.get("kern_these", "") if isinstance(a, dict) else ""
+            if these:
+                query_parts.append(these)
+        query = " ".join(query_parts).strip() or "kanzlei brief"
+
+        try:
+            matches = await rag_store.search_similar(
+                query_text=query,
+                n_results=n_results,
+                filter_dict={"empfaenger": empfaenger},
+                collection_name="kanzlei_wissen",
+            )
+            if len(matches) < 3:
+                matches = await rag_store.search_similar(
+                    query_text=query,
+                    n_results=n_results,
+                    collection_name="kanzlei_wissen",
+                )
+            return matches or []
+        except Exception as e:
+            logger.warning(f"_search_goldstandard_fuer_brief Fehler: {e}")
+            return []
+
+    async def _generate_brief_stage2(
+        self,
+        akte_id: int,
+        payload: dict,
+    ) -> dict:
+        """
+        Stage 2: Separater, fokussierter Gemini-Call NUR für Brieftext-Formulierung.
+        - Eigener schlanker System-Prompt (Kanzlei-Voice + Aufbau + Stilvorlagen)
+        - Keine Tools, kein Akten-Volltext, kein Workflow-Kontext
+        - Temperatur 1.0 für Formulierungs-Kreativität
+        Returns: {"brief_text": str, "betreff_vorschlag": str, "stage2_ok": bool}
+        """
+        from app.main import get_gemini_client
+        gemini = get_gemini_client()
+        if not gemini:
+            return {
+                "brief_text": "",
+                "betreff_vorschlag": "",
+                "stage2_ok": False,
+                "error": "Gemini API nicht bereit",
+            }
+
+        brief_zweck = str(payload.get("brief_zweck", "")).strip() or "kanzlei_brief"
+        empfaenger = str(payload.get("empfaenger", "versicherung")).strip().lower()
+        ton = str(payload.get("ton", "sachlich")).strip().lower()
+        fakten = payload.get("fakten", []) or []
+        argumente = payload.get("juristische_argumente", []) or []
+        forderung = payload.get("forderung") or {}
+        besondere_hinweise = str(payload.get("besondere_hinweise", "")).strip()
+
+        # 1. Goldstandard-Stilvorlagen laden (dynamischer Query)
+        gs_matches = await self._search_goldstandard_fuer_brief(
+            brief_zweck=brief_zweck,
+            empfaenger=empfaenger,
+            argumente=argumente,
+            n_results=5,
+        )
+        if gs_matches:
+            gs_parts = []
+            for i, m in enumerate(gs_matches, 1):
+                text = (m.get("text") or "").strip()
+                meta = m.get("metadata") or {}
+                typ = meta.get("typ", "")
+                betreff = meta.get("betreff", "")
+                label = f"Beispiel {i}" + (f" [{typ}]" if typ else "") + (f" — {betreff}" if betreff else "")
+                gs_parts.append(f"--- {label} ---\n{text}")
+            goldstandard_block = "\n\n".join(gs_parts)
+        else:
+            goldstandard_block = "(Keine Stilvorlagen gefunden — orientiere dich strikt am Aufbau oben.)"
+
+        # 2. Fakten-Block
+        if fakten:
+            fakten_lines = []
+            for f in fakten:
+                if not isinstance(f, dict):
+                    continue
+                typ = str(f.get("typ", "?"))
+                wert = str(f.get("wert", ""))
+                beleg = str(f.get("beleg_dokument_titel", "")).strip()
+                line = f"- {typ}: {wert}"
+                if beleg:
+                    line += f"  [Quelle: {beleg}]"
+                fakten_lines.append(line)
+            fakten_block = "\n".join(fakten_lines)
+        else:
+            fakten_block = "(keine expliziten Fakten übergeben)"
+
+        # 3. Argumente-Block
+        if argumente:
+            arg_lines = []
+            for i, a in enumerate(argumente, 1):
+                if not isinstance(a, dict):
+                    continue
+                kt = str(a.get("kern_these", "")).strip()
+                bg = str(a.get("begruendung", "")).strip()
+                rs = str(a.get("rechtsprechung", "")).strip()
+                arg_lines.append(f"{i}. Kern-These: {kt}\n   Begründung: {bg}" + (f"\n   Rechtsprechung: {rs}" if rs else ""))
+            argumente_block = "\n\n".join(arg_lines)
+        else:
+            argumente_block = "(keine juristischen Argumente — reines Erstanschreiben o.ä.)"
+
+        # 4. Forderung-Block
+        if forderung and isinstance(forderung, dict):
+            f_parts = []
+            if forderung.get("betrag_eur") is not None:
+                f_parts.append(f"Betrag: {forderung.get('betrag_eur')} EUR")
+            if forderung.get("frist_datum"):
+                f_parts.append(f"Frist: {forderung.get('frist_datum')}")
+            if forderung.get("beschreibung"):
+                f_parts.append(f"Beschreibung: {forderung.get('beschreibung')}")
+            forderung_block = "\n".join(f_parts) if f_parts else "(keine konkrete Forderung)"
+        else:
+            forderung_block = "(keine konkrete Forderung)"
+
+        ton_beschreibung = {
+            "forsch": "Direkt und bestimmt — klare Forderung, Klagandrohung am Ende, keine Weichmacher.",
+            "sachlich": "Neutral und sachlich — keine Eskalation, keine Klagandrohung, Fakten und Forderung klar benennen.",
+            "deeskalierend": "Verständnisvoll und konstruktiv — Fokus auf Klärung und Lösung, keine Drohungen, kooperativer Ton.",
+        }.get(ton, "Neutral und sachlich.")
+
+        system_prompt = f"""Du bist der Brief-Schreiber der Kanzlei AWR24. Deine EINZIGE Aufgabe:
+Schreibe genau einen Kanzlei-Brief basierend auf dem Payload unten.
+Keine Analyse, keine Empfehlungen, keine Rückfragen.
+
+KANZLEI-VOICE (verbindlich):
+- kurz, direkt, juristisch präzise
+- kein Gutachter-Jargon, keine akademischen Formulierungen
+- KEINE Überschriften wie "Sachverhalt:", "Prüfungsmaßstab:", "Fazit:", "Ergebnis:", "I.", "II."
+- nummerierte Argumente (1., 2., 3.) NUR wenn mindestens 2 juristische Argumente vorliegen
+
+AUFBAU (in dieser Reihenfolge):
+1. Eröffnung (ein Satz): klarer Bezug auf Anlass (Widerspruch / Erstanschreiben / Sachstandsinfo / Mahnung)
+2. Argumente: je 2-3 Sätze Fließtext pro Kern-These. Bei mehreren Argumenten nummeriert.
+3. Forderung: konkreter Betrag + konkrete Frist (wenn im Payload vorhanden)
+4. Klagandrohung — NUR bei ton="forsch":
+   "Sollte die Zahlung nicht fristgerecht erfolgen, werden wir ohne weitere Vorankündigung
+   gerichtliche Schritte einleiten, deren Kosten vollumfänglich zu Ihren Lasten gehen."
+
+FORMAT — PFLICHT:
+- NUR Fließtext — KEIN Briefkopf, KEIN Datum, KEINE Anrede ("Sehr geehrte..."), KEIN Schluss
+  ("Mit freundlichen Grüßen"), KEIN Aktenzeichen, KEINE Signatur
+- Absätze mit doppelter Leerzeile (\\n\\n) trennen
+- KEIN Markdown (keine Sternchen, keine Rauten, keine Listen mit Bindestrichen)
+- Kurz ist besser als lang — NIEMALS länger als eine Seite
+- NUTZE die echten Werte aus den FAKTEN — NIEMALS Platzhalter wie [Datum] oder [Betrag]
+
+TON: {ton_beschreibung}
+
+VERBOTEN:
+- NbLM-Abschnittstitel ("GUTACHTERLICHE STELLUNGNAHME", "Prüfungsmaßstab", "Ergebnis") übernehmen
+- Wörtliche Copy-Pastes aus den Argument-Feldern — immer in eigenen Worten formulieren
+- Fakten erfinden, die nicht im Payload stehen
+- Wiederholen was in der Anrede/Signatur sowieso steht
+- Personalisierte Anrede ("Herr Müller", "Frau Schmidt") — kommt aus dem Template
+
+STILVORLAGEN — echte Kanzlei-Briefe (Referenz für Ton und Länge, NICHT wörtlich übernehmen):
+{goldstandard_block}
+
+---
+
+PAYLOAD FÜR DIESEN BRIEF:
+
+Brief-Zweck: {brief_zweck}
+Empfänger: {empfaenger}
+Ton: {ton}
+
+FAKTEN (ausschließlich diese verwenden):
+{fakten_block}
+
+JURISTISCHE ARGUMENTE:
+{argumente_block}
+
+FORDERUNG:
+{forderung_block}
+
+BESONDERE HINWEISE:
+{besondere_hinweise if besondere_hinweise else "(keine)"}
+
+---
+
+ANTWORT-FORMAT — PFLICHT, NICHTS ABWEICHEN:
+
+BETREFF: <prägnante Betreffzeile, maximal 80 Zeichen, OHNE Aktenzeichen>
+---
+<Fließtext des Briefes>
+
+Beginne jetzt mit "BETREFF:"."""
+
+        from google.genai import types as genai_types
+        config = genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=1.0,
+            thinking_config=genai_types.ThinkingConfig(include_thoughts=False),
+        )
+
+        try:
+            response = await gemini.client.aio.models.generate_content(
+                model=gemini.model_name,
+                contents=[{"role": "user", "parts": [{"text": "Schreibe jetzt den Brief."}]}],
+                config=config,
+            )
+        except Exception as e:
+            err_str = str(e)
+            logger.error(f"Stage 2 Gemini-Call fehlgeschlagen: {err_str}")
+            if "429" in err_str or "ResourceExhausted" in err_str or "quota" in err_str.lower():
+                return {
+                    "brief_text": "",
+                    "betreff_vorschlag": "",
+                    "stage2_ok": False,
+                    "error": "Gemini API Tageslimit erreicht.",
+                }
+            return {
+                "brief_text": "",
+                "betreff_vorschlag": "",
+                "stage2_ok": False,
+                "error": f"Stage-2-Call fehlgeschlagen: {err_str[:200]}",
+            }
+
+        try:
+            raw_text = response.text if response.candidates else ""
+        except ValueError:
+            raw_text = ""
+
+        raw_text = _strip_markdown(raw_text or "").strip()
+        if not raw_text:
+            return {
+                "brief_text": "",
+                "betreff_vorschlag": "",
+                "stage2_ok": False,
+                "error": "Stage 2 lieferte leeren Text zurück.",
+            }
+
+        # BETREFF: <zeile>\n---\n<brief_text> parsen
+        betreff_vorschlag = ""
+        brief_text = raw_text
+        lines = raw_text.split("\n", 1)
+        if lines and lines[0].upper().startswith("BETREFF:"):
+            betreff_vorschlag = lines[0].split(":", 1)[1].strip() if ":" in lines[0] else ""
+            rest = lines[1] if len(lines) > 1 else ""
+            # Trenner "---" wegschneiden
+            parts = rest.split("---", 1)
+            brief_text = (parts[1] if len(parts) > 1 else parts[0]).strip()
+
+        logger.info(
+            f"Stage 2: Brief generiert (akte={akte_id}, zweck={brief_zweck}, empf={empfaenger}, "
+            f"ton={ton}, wortzahl={len(brief_text.split())}, gs_matches={len(gs_matches)})"
+        )
+
+        return {
+            "brief_text": brief_text,
+            "betreff_vorschlag": betreff_vorschlag,
+            "stage2_ok": True,
+            "goldstandard_count": len(gs_matches),
+        }
+
     async def handle_akte_chat(
         self,
         akte_id: int,
@@ -1271,25 +1551,8 @@ class QueryService:
         from datetime import datetime as _dt
         heute_str = _dt.now().strftime("%d.%m.%Y")
 
-        # RAG: Goldstandard-Briefe aus kanzlei_wissen als Stilvorlagen laden
-        goldstandard_text = ""
-        try:
-            from app.services.rag_store import rag_store as _rag  # type: ignore[attr-defined]
-            gs_query = f"Erstanschreiben Versicherung Widerspruch Forderung Kanzlei {falltyp.replace('_', ' ')}"
-            gs_matches = await _rag.search_similar(gs_query, n_results=3, collection_name="kanzlei_wissen")
-            if gs_matches:
-                gs_parts = []
-                for i, m in enumerate(gs_matches, 1):
-                    text = m.get("text", "").strip()
-                    meta = m.get("metadata", {})
-                    typ = meta.get("typ", "")
-                    betreff = meta.get("betreff", "")
-                    label = f"Beispiel {i}" + (f" [{typ}]" if typ else "") + (f" — {betreff}" if betreff else "")
-                    gs_parts.append(f"--- {label} ---\n{text}")
-                goldstandard_text = "\n\n".join(gs_parts)
-                logger.info(f"handle_akte_chat: {len(gs_matches)} Goldstandard-Briefe als Stilvorlagen geladen.")
-        except Exception as _gs_err:
-            logger.warning(f"Goldstandard-Ladung fehlgeschlagen (nicht kritisch): {_gs_err}")
+        # Goldstandard-Stilvorlagen werden NICHT in Stage 1 geladen — Stage 2 (entwerfe_brief) holt sie
+        # sich dynamisch per _search_goldstandard_fuer_brief anhand des Brief-Zwecks.
 
         # RAG: ALLE Dokument-Inhalte dieser Akte laden — vollständig, wie Anwalt der Akte liest
         akte_rag_text = ""
@@ -1422,99 +1685,73 @@ Du hast die vollständigen Dokument-Inhalte der Akte oben im Kontext. Nutze sie 
 Ziel: Der User soll sofort wissen WOHER die Information stammt, ohne die gesamte Akte
 durchsuchen zu müssen. Immer Dokumenttitel nennen, nie nur "laut Akte" oder "ich sehe".
 
-BRIEFE — ZWEISTUFIGER ABLAUF (PFLICHT, GILT FÜR JEDEN BRIEF EINZELN):
-Schritt 1 — Entwurf zeigen:
-  Wenn der User einen Brief anfordert, schreibe den vollständigen Brieftext als Entwurf in den Chat.
-  Nur Fließtext: kein Briefkopf, kein Datum, keine Anrede, kein "Mit freundlichen Grüßen", kein Markdown.
-  Beende die Antwort mit: "Soll ich diesen Brief so speichern? (Ja / Nein oder Änderungswunsch)"
+BRIEFE — NEUER ZWEI-STUFEN-ABLAUF (PFLICHT, GILT FÜR JEDEN BRIEF EINZELN):
+
+ABSOLUTE GRUNDREGEL: Du schreibst NIEMALS Brief-Fließtext direkt in deine Chat-Antwort.
+Für JEDEN Brief: rufe `entwerfe_brief` auf. Stage 2 formuliert den Brief, du präsentierst ihn nur.
+
+Schritt 1 — Fakten und Argumente sammeln, entwerfe_brief aufrufen:
+  1. Kuratiere aus DOKUMENT-INHALTE oben die konkret belegbaren Fakten (Datum, Beträge,
+     Positionen, Beleg-Dokumente). Nur belegbare Fakten — keine Vermutungen.
+  2. Bei NotebookLM-Input (siehe NOTEBOOKLM-WORKFLOW unten): extrahiere Kern-Thesen
+     strukturiert in das juristische_argumente-Array.
+  3. Schlage anhand Kontext einen Ton vor: "forsch" (Mahnung, zweiter Widerspruch),
+     "sachlich" (Erstanschreiben, Sachstandsinfo), "deeskalierend" (Mandantenschreiben).
+  4. Rufe `entwerfe_brief` mit akte_id, brief_zweck, empfaenger, ton, fakten,
+     juristische_argumente, optional forderung und besondere_hinweise.
+  5. Stage 2 liefert brief_text und betreff_vorschlag zurück.
+  6. Zeige den zurückgegebenen brief_text 1:1 im Chat — KEINE Umformulierung.
+     Schließe mit: "Soll ich diesen Brief so speichern? (Ja / Nein oder Änderungswunsch)"
 
 Schritt 2 — Speichern nach Bestätigung:
-  ⚡ SONDERREGEL: Wenn der User exakt "%%BRIEF_SPEICHERN%%" sendet → Das ist ein Klick auf den Speichern-Button.
-  → SOFORT `erstelle_brief` aufrufen. ABSOLUT kein Text davor, keine Ankündigung, kein "Ich speichere...".
-  Wenn der User anders bestätigt ("Ja", "Speichern", "Ok", "Mach das", "viel besser mach das" o.ä.):
-  → Rufe SOFORT `erstelle_brief` auf mit dem zuvor gezeigten Brieftext. KEIN weiterer Text davor.
-  Falls der User Änderungen wünscht: überarbeite den Entwurf und zeige ihn erneut (→ wieder Schritt 1).
-  NIEMALS `erstelle_brief` aufrufen ohne ausdrückliche Bestätigung des Users.
-  NIEMALS mehrere Briefe gleichzeitig erstellen — immer einen nach dem anderen.
-  Beim Doppelpack: erst Versicherungsbrief zeigen → bestätigen → speichern → dann Mandantenbrief zeigen → bestätigen → speichern.
+  ⚡ SONDERREGEL: Wenn der User exakt "%%BRIEF_SPEICHERN%%" sendet → Klick auf Speichern-Button.
+  → SOFORT `erstelle_brief` mit dem Entwurf-Text von Stage 2 aufrufen. KEIN Text davor.
+  Wenn der User anders bestätigt ("Ja", "Speichern", "Ok", "Mach das" o.ä.):
+  → Rufe SOFORT `erstelle_brief` mit brief_text und betreff aus dem Stage-2-Resultat auf.
+  Falls der User Änderungen wünscht: rufe `entwerfe_brief` erneut mit angepasstem Payload auf
+  (z.B. anderer ton, zusätzliche Fakten, überarbeitete Argumente) → zeige neuen Entwurf.
+  NIEMALS `erstelle_brief` ohne ausdrückliche Bestätigung aufrufen.
+  NIEMALS mehrere Briefe gleichzeitig — immer einen nach dem anderen.
+  Beim Doppelpack: erst Versicherungsbrief entwerfen → bestätigen → speichern → dann Mandantenbrief.
 
-STILVORLAGEN — ECHTE KANZLEI-BRIEFE (zur Orientierung für Ton, Länge, Struktur):
-{goldstandard_text if goldstandard_text else "Keine Vorlagen verfügbar — orientiere dich am Briefstil unten."}
+AUSNAHME — RVG-FINALSCHREIBEN:
+`berechne_rvg` liefert einen rechtlich geprüften `brief_text_vorlage` + `betreff_vorlage` zurück.
+Diese Felder gehen NICHT durch entwerfe_brief — nimm sie 1:1 und rufe direkt erstelle_brief auf
+(brief_text = brief_text_vorlage, betreff = betreff_vorlage). KEINE Umformulierung, KEINE Stage 2.
 
-KANZLEI-BRIEFSTIL — PFLICHT FÜR ALLE SCHREIBEN:
-
-Aufbau eines Kanzlei-Briefs (in dieser Reihenfolge):
-  1. Eröffnung: Bezug auf vorherigen Schriftwechsel / Prüfbericht + Widerspruch oder Ankündigung
-     Beispiel: "Wir widersprechen Ihrer Kürzung vom [Datum] aus folgendem Grund:"
-  2. Begründung: Juristische Argumente — bei mehreren Punkten als nummerierte Abschnitte
-     (1. Argument-Überschrift, 2. Argument-Überschrift...) mit kurzem Fließtext je Punkt.
-  3. Forderung: Konkreter Betrag + Zahlungsfrist
-     Beispiel: "Wir fordern Sie daher auf, den Betrag von [X EUR] bis spätestens [Datum]
-     auf das bekannte Konto zu überweisen."
-  4. Klagandrohung (letzter Satz):
-     "Sollte die Zahlung nicht fristgerecht erfolgen, werden wir ohne weitere Vorankündigung
-     gerichtliche Schritte einleiten, deren Kosten vollumfänglich zu Ihren Lasten gehen."
-
-VERBOTEN in Kanzlei-Briefen:
-  - Überschriften wie "GUTACHTERLICHE STELLUNGNAHME", "Prüfungsmaßstab:", "I. Sachverhalt:",
-    "Zusammenfassung:", "Ergebnis:", "Fazit:" — das ist Gutachter-Sprache, kein Kanzlei-Stil.
-  - Platzhalter im fertigen Brief — IMMER echte Daten aus dem Aktenkontext einsetzen:
-    Statt [Datum] → echtes Datum (z.B. 10.04.2026); statt [Betrag] → echte Zahl aus Finanzdaten.
-  - Wörtliche Übernahmen aus externen Analysen (NotebookLM, ChatGPT etc.).
-  - Akademischer Jargon ("Prüfungsmaßstab", "nach den Grundsätzen der...", "subsumiert").
-
-ERLAUBT und ERWÜNSCHT:
-  - Nummerierte Abschnitte für mehrere juristische Argumente (wie in einem echten Anwaltsbrief).
-  - Klare, direkte Sprache ("Ihre Kürzung ist rechtswidrig." statt "Es könnte sein, dass...").
-  - Rechtsprechungs-Zitate kurz und eingebettet in Fließtext.
-
-NOTEBOOKLM-WORKFLOW — VOLLSTÄNDIGER ABLAUF:
-Dieser Workflow wird täglich genutzt. Du kennst und führst ihn korrekt durch:
+NOTEBOOKLM-WORKFLOW (täglich genutzt):
 
 Phase 1 — Du generierst den NotebookLM-Prompt:
-  Der User fordert eine juristische Analyse an (z.B. "Erstelle einen NotebookLM-Prompt
-  für den Widerspruch gegen die Sachverständigenkürzung").
-  Du erzeugst einen strukturierten Prompt: Sachverhalt, konkrete Rechtsfragen, Ziel.
-  Du sendest diesen als fertigen Text — der User kopiert ihn in NotebookLM.
+  Der User fordert eine juristische Analyse an. Du erzeugst einen strukturierten Prompt
+  (Sachverhalt, Rechtsfragen, Ziel) — der User kopiert ihn in NotebookLM.
 
   !!DATENSCHUTZ-PFLICHT (DSGVO) — GILT FÜR ALLE PROMPTS FÜR EXTERNE KI-TOOLS!!
-  Prompts gehen an externe Dienste (NotebookLM, ChatGPT etc.) — NIEMALS echte Namen,
-  Kennzeichen, Nummern oder sonstige personenbezogene Daten einbauen!
-  Schreibe natürlich ohne Platzhalter-Klammern:
-  - Mandantenname → "unser Mandant"
-  - Gegnername / Versicherungsname → "die Versicherung"
-  - Kennzeichen → weglassen
-  - Gutachten-Nummern, Aktenzeichen → weglassen
-  - Sachverständigen-Namen → "der beauftragte Sachverständige"
-  - Adressen → weglassen
-  Sachliche Angaben (Beträge, Zeiträume, Fahrzeugtyp, rechtliche Situation) dürfen bleiben.
+  NIEMALS echte Namen, Kennzeichen, Nummern oder personenbezogene Daten einbauen.
+  Mandantenname → "unser Mandant"; Gegner → "die Versicherung"; Kennzeichen, Aktenzeichen,
+  SV-Namen, Adressen → weglassen. Sachliche Angaben (Beträge, Zeiträume, Fahrzeugtyp,
+  rechtliche Situation) dürfen bleiben.
 
-Phase 2 — NotebookLM liefert juristische Analyse:
-  NotebookLM antwortet mit einer juristischen Analyse — oft mit akademischen Überschriften
-  ("GUTACHTERLICHE STELLUNGNAHME", nummerierten Abschnitten, Rechtsprechungs-Zitaten).
-  Das ist NbLM-Sprache — keine Kanzlei-Sprache.
+Phase 2 — NotebookLM liefert Gutachter-Sprache:
+  Akademische Überschriften, Nummerierung I./II., "GUTACHTERLICHE STELLUNGNAHME" etc. —
+  das ist NbLM-Sprache, keine Kanzlei-Sprache.
 
-Phase 3 — User fügt die Analyse bei dir ein:
-  Wenn der User einen Text einfügt der wie eine juristische Analyse aussieht
-  (Überschriften, Nummerierung I./II./1./2., Gutachten-Sprache):
-    → ERKENNE: "Das ist die NotebookLM-Analyse — ich baue daraus einen Kanzlei-Brief."
-    → EXTRAHIERE nur: die juristischen KERN-ARGUMENTE (was spricht rechtlich dagegen?)
-    → VERGISS: alle Überschriften, akademischen Formulierungen, Gutachten-Struktur der Analyse
-    → SCHREIBE KOMPLETT NEU als kurzer, direkter Anwaltsbrief:
-       - Eröffnung (1 Satz): klarer Widerspruch / klare Forderung
-       - Argumente (je 2-3 Sätze, KEINE Gutachten-Überschriften wie "Vorrang der...")
-         Statt "Vorrang der individuellen Begutachtung vor Tabellenwerten:" → einfach:
-         "Das Sachverständigengutachten hat den Nutzungswert konkret festgestellt..."
-       - Forderung mit Betrag + Frist
-       - Klagandrohung (1 Satz)
-    → NIEMALS NbLM-Abschnittstitel als Bullet-/Abschnittsüberschriften übernehmen
-    → NIEMALS länger als 1 Seite — kurz und direkt ist besser als vollständig und lang
+Phase 3 — User fügt die NbLM-Analyse bei dir ein:
+  Erkenne den Text an Überschriften / Nummerierung / Gutachter-Sprache.
+  Antworte knapp: "Das ist die NotebookLM-Analyse — ich extrahiere die Kern-Argumente und
+  entwerfe den Brief."
+  EXTRAHIERE pro Argument STRUKTURIERT in das juristische_argumente-Array:
+    - kern_these: Ein-Satz-These (KEINE Gutachter-Überschrift wie "Vorrang der individuellen Begutachtung")
+    - begruendung: 2-3 Sätze Klartext (kein "Prüfungsmaßstab:", kein "Ergebnis:")
+    - rechtsprechung: optional, falls im Text vorhanden
+  VERGISS die NbLM-Überschriften und die akademische Struktur.
+  Rufe dann `entwerfe_brief` mit diesem Array + Fakten aus der Akte auf.
+  Stage 2 formuliert daraus den kurzen, direkten Anwaltsbrief — nicht du.
 
 - Wenn der User einen Brief mit RVG-Gebühren anfordert:
-  1. Prüfe ob die FINANZDATEN oben bereits RVG-Positionen enthalten.
-  2. Falls KEINE RVG-Positionen vorhanden: Nutze zuerst `berechne_rvg`.
-  3. Dann den Brief-Entwurf im Chat zeigen und auf Bestätigung warten (Schritt 1).
-- Die RVG-Gebühren werden AUTOMATISCH aus dem Gegenstandswert der Akte berechnet — frage NICHT danach.
+  1. Prüfe ob FINANZDATEN bereits RVG-Positionen enthalten.
+  2. Falls keine: Nutze zuerst `berechne_rvg` (erstellt Positionen + Finalschreiben-Text).
+  3. Danach greift die RVG-Finalschreiben-Ausnahme oben — KEIN entwerfe_brief nötig.
+- Die RVG-Gebühren werden automatisch aus dem Gegenstandswert berechnet — frage nicht danach.
 
 SCHÄTZPOSITION DURCH TATSÄCHLICHE RECHNUNG ERSETZEN:
 Wenn eine Position auf einem SV-Gutachten/Schätzung basiert und eine tatsächliche Rechnung
@@ -1669,8 +1906,58 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                         }
                     },
                     {
+                        "name": "entwerfe_brief",
+                        "description": "Erstellt einen Brief-Entwurf über einen separaten, fokussierten KI-Call (Stage 2). IMMER nutzen, wenn ein Brief benötigt wird — schreibe niemals Brief-Fließtext direkt in die Chat-Antwort. AUSNAHME: RVG-Finalschreiben nach berechne_rvg — dort brief_text_vorlage direkt an erstelle_brief geben. Ablauf: Du sammelst Fakten aus der Akte + bereinigte juristische Argumente (aus NotebookLM falls vorhanden), übergibst sie strukturiert. Das Tool liefert brief_text und betreff_vorschlag zurück — die zeigst du 1:1 im Chat mit der Rückfrage 'Soll ich diesen Brief so speichern?'",
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "akte_id": {"type": "INTEGER"},
+                                "brief_zweck": {"type": "STRING", "description": "Kurze Kategorie des Briefes in Snake-Case. Beispiele: 'erstanschreiben_versicherung', 'erstanschreiben_mandant', 'widerspruch_sv_honorar_kuerzung', 'widerspruch_nutzungsausfall', 'mahnung_vor_klage', 'sachstandsinfo_mandant'. Wird für Goldstandard-RAG-Query verwendet — je präziser, desto bessere Stilvorlagen."},
+                                "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
+                                "ton": {"type": "STRING", "enum": ["forsch", "sachlich", "deeskalierend"], "description": "Tonvorgabe für Stage 2. Schlage anhand Kontext vor: Erstanschreiben = sachlich; zweiter Widerspruch / Mahnung = forsch; Schreiben an eigenen Mandanten = sachlich oder deeskalierend. User kann per Chat korrigieren — dann Tool erneut mit angepasstem ton rufen."},
+                                "fakten": {
+                                    "type": "ARRAY",
+                                    "description": "Kuratierte Fakten aus der Akte, die in den Brief eingebaut werden sollen. NUR belegbare Fakten — keine Vermutungen. Stage 2 hat KEINEN Akten-Volltext und nutzt ausschließlich diese Liste.",
+                                    "items": {
+                                        "type": "OBJECT",
+                                        "properties": {
+                                            "typ": {"type": "STRING", "description": "Art des Faktums, z.B. 'unfall_datum', 'schadenposition', 'offener_betrag', 'mandant_name', 'gegner_name', 'kennzeichen', 'aktenzeichen_vers', 'fahrzeug', 'zahlungseingang'"},
+                                            "wert": {"type": "STRING", "description": "Der konkrete Wert, z.B. '10.03.2026' oder 'SV-Honorar 999,34€'"},
+                                            "beleg_dokument_titel": {"type": "STRING", "description": "Optional: Titel des Quell-Dokuments in der Akte für Zitiergebot, z.B. 'SV-Rechnung vom 12.03.2026'"}
+                                        },
+                                        "required": ["typ", "wert"]
+                                    }
+                                },
+                                "juristische_argumente": {
+                                    "type": "ARRAY",
+                                    "description": "Bereinigte juristische Argumente — bei NotebookLM-Input: Kern-Thesen extrahieren, akademische Überschriften und Gutachter-Jargon weglassen. Leere Liste erlaubt bei reinen Erstanschreiben ohne Streitpunkt.",
+                                    "items": {
+                                        "type": "OBJECT",
+                                        "properties": {
+                                            "kern_these": {"type": "STRING", "description": "Eine-Satz-These, z.B. 'Versicherung darf nicht pauschal auf Schwacke-Tabelle zurückgreifen, wenn konkrete SV-Feststellung vorliegt'"},
+                                            "begruendung": {"type": "STRING", "description": "2-3 Sätze Begründung in Klartext — kein Gutachter-Jargon, keine Überschriften, kein 'Prüfungsmaßstab:'"},
+                                            "rechtsprechung": {"type": "STRING", "description": "Optional: Rechtsprechungs-Zitat in Kurzform, z.B. 'BGH VI ZR 320/15'"}
+                                        },
+                                        "required": ["kern_these", "begruendung"]
+                                    }
+                                },
+                                "forderung": {
+                                    "type": "OBJECT",
+                                    "description": "Optional: Konkrete Forderung am Briefende.",
+                                    "properties": {
+                                        "betrag_eur": {"type": "NUMBER", "description": "Geforderter Betrag in Euro"},
+                                        "frist_datum": {"type": "STRING", "description": "Zahlungsfrist ISO YYYY-MM-DD"},
+                                        "beschreibung": {"type": "STRING", "description": "Freitext-Beschreibung wenn kein Betrag/Frist (z.B. 'Stellungnahme zum Vorfall')"}
+                                    }
+                                },
+                                "besondere_hinweise": {"type": "STRING", "description": "Optional: Flexibilitäts-Ventil für Edge-Cases, z.B. 'Keine Klagandrohung — Mandant möchte zunächst deeskalierend bleiben' oder 'Bitte auf kürzlich ergangenes OLG-Urteil Bezug nehmen'."}
+                            },
+                            "required": ["akte_id", "brief_zweck", "empfaenger", "ton", "fakten", "juristische_argumente"]
+                        }
+                    },
+                    {
                         "name": "erstelle_brief",
-                        "description": "Einen professionellen Brief für die Akte erstellen und als Dokument speichern. Du schreibst den vollständigen Brieftext selbst (nur Fließtext, kein Briefkopf, keine Anrede, kein 'Mit freundlichen Grüßen'). Briefkopf, Datum, Anrede und Signatur werden automatisch ergänzt.",
+                        "description": "Speichert einen vom User bestätigten Brief als Dokument (.docx + DB). Rufe dies NUR nach ausdrücklicher User-Bestätigung eines zuvor durch entwerfe_brief (oder berechne_rvg.brief_text_vorlage) generierten Entwurfs. Der brief_text ist der Entwurf-Text 1:1 — keine Umformulierung. Briefkopf, Datum, Anrede und Signatur werden automatisch aus der Vorlage ergänzt.",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
