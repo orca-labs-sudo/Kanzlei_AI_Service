@@ -1520,6 +1520,26 @@ ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
 - WICHTIG: Rufe Tools TATSÄCHLICH auf — antworte NIEMALS nur mit Text "Aufgabe erstellt" oder "Status geändert" ohne den entsprechenden Tool-Aufruf durchzuführen!
 - Du darfst einen KURZEN Satz schreiben während du eine Aktion ausführst (z.B. "Aufgabe wird erstellt..." oder "Speichere den Brief...") — aber IMMER zusammen mit dem Tool-Call in DERSELBEN Antwort. Nie Text ohne Tool-Call wenn eine Aktion gemeint ist.
 
+ZAHLUNGSMONITOR & BANKBEWEGUNGEN — WIE ES ZUSAMMENHÄNGT:
+Der Zahlungsmonitor ist ein separates Modul wo CSV-Kontoauszüge (CommerzBank) importiert werden.
+Jede Bankbewegung (Buchungszeile) kann manuell oder per KI einer Zahlungsposition zugeordnet werden.
+
+Datenfluss: Bankbewegung (CSV-Import) → Zahlungsabgleich → Zahlungsposition
+- Eine Bankbewegung ist OFFEN solange sie keiner Position zugeordnet ist
+- Eine Bankbewegung wird ZUGEORDNET wenn sie mit einem Zahlungsabgleich verknüpft ist
+- Der Zahlungsabgleich enthält Details: wer hat gezahlt, wann, wie viel, wohin weitergeleitet
+
+Was `get_finanzdaten` jetzt liefert:
+- Jede Position enthält ein `abgleich`-Objekt (null wenn kein Abgleich existiert)
+- Im Abgleich steht: zahlungsstatus, eingegangen_betrag, eingegangen_datum, empfaenger
+- Und: bankbewegung_id + bankbewegung_betrag falls eine Bankbewegung zugeordnet ist
+
+Wann welches Tool:
+- User fragt "ist ein Zahlungseingang da?" → `get_bankbewegungen` aufrufen
+- Zahlung ist im Abgleich sichtbar (get_finanzdaten → abgleich.zahlungsstatus=EINGEGANGEN) → bereits erfasst
+- User sagt "buche den Eingang" für eine Schadensposition → `aktualisiere_zahlungsabgleich` ODER `buche_zahlung`
+- User sagt "RVG wurde bezahlt" → `buche_rvg_zahlung`
+
 KOMBINIERTE AUFGABEN — PFLICHT-KETTE (nicht unterbrechen):
 Wenn der User mehrere Dinge auf einmal verlangt (z.B. "buche alles und erstelle einen Brief"),
 führe ALLE Schritte in einer einzigen Antwort durch — ohne zwischendurch Text zu schreiben:
@@ -1760,6 +1780,23 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                                 "notiz": {"type": "STRING", "description": "Interne Notiz, z.B. Referenznummer der Versicherung oder Abweichungsgrund"}
                             },
                             "required": ["position_id", "zahlungsstatus"]
+                        }
+                    },
+                    {
+                        "name": "get_bankbewegungen",
+                        "description": (
+                            "Offene Bankbewegungen (Kontoeingänge) für diese Akte abrufen — aus dem Zahlungsmonitor. "
+                            "Zeigt CSV-importierte Buchungszeilen die noch keiner Position zugeordnet sind (status=OFFEN) "
+                            "sowie bereits zugeordnete Bewegungen dieser Akte. "
+                            "Nutze dies wenn der User fragt ob ein Zahlungseingang im System ist, "
+                            "oder welche Bankbewegungen zu dieser Akte gehören."
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "akte_id": {"type": "INTEGER", "description": "Die Akte-ID"},
+                            },
+                            "required": ["akte_id"]
                         }
                     },
                     {
