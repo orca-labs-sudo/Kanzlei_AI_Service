@@ -1067,12 +1067,41 @@ class QueryService:
                     return _safe_json(resp)
 
                 elif tool_name == "buche_zahlung":
+                    payload = {
+                        "zahlungsposition_id": args["zahlungsposition_id"],
+                        "haben_betrag": args["haben_betrag"],
+                    }
+                    if args.get("soll_betrag") is not None:
+                        payload["soll_betrag"] = args["soll_betrag"]
+                    if args.get("status"):
+                        payload["status"] = args["status"]
                     resp = await client.post(
                         f"{self.django_base}/api/ai/actions/buche_zahlung/",
-                        json={
-                            "zahlungsposition_id": args["zahlungsposition_id"],
-                            "haben_betrag": args["haben_betrag"],
-                        },
+                        json=payload,
+                        headers=headers
+                    )
+                    return _safe_json(resp)
+
+                elif tool_name == "buche_rvg_zahlung":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/buche_rvg_zahlung/",
+                        json={"akte_id": args["akte_id"]},
+                        headers=headers
+                    )
+                    return _safe_json(resp)
+
+                elif tool_name == "get_bankbewegungen":
+                    resp = await client.get(
+                        f"{self.django_base}/api/finance/bankbewegungen/",
+                        params={"akte": args["akte_id"], "status": "OFFEN"},
+                        headers=headers
+                    )
+                    return _safe_json(resp)
+
+                elif tool_name == "aktualisiere_zahlungsabgleich":
+                    resp = await client.post(
+                        f"{self.django_base}/api/ai/actions/aktualisiere_zahlungsabgleich/",
+                        json=args,
                         headers=headers
                     )
                     return _safe_json(resp)
@@ -1473,14 +1502,16 @@ Wenn eine Position auf einem SV-Gutachten/Schätzung basiert und eine tatsächli
 NIEMALS den SOLL-Betrag einer alten Position ändern wenn sie durch eine neue ersetzt wird —
 deaktivieren ist sauberer und erhält die Übersicht.
 
-RVG IST EINE OFFENE FORDERUNG — NIEMALS ALS BEZAHLT BUCHEN:
+RVG-POSITIONEN — DREI TOOLS, KLARE REGELN:
 - `berechne_rvg` erstellt DREI getrennte Zahlungspositionen (1,3 Geschäftsgebühr + Auslagenpauschale + 19% USt).
-- NIEMALS RVG-Positionen über `erstelle_zahlungspositionen` anlegen — immer `berechne_rvg` nutzen!
-- Diese Positionen sind OFFEN — die Versicherung hat die RVG noch NICHT bezahlt.
-- NIEMALS `buche_zahlung` für eine RVG-Position aufrufen die gerade erst erstellt wurde.
-- "buche alles passend" bedeutet: buche die vom Versicherung ERHALTENEN Zahlungen für Schaden.
-  RVG wird erst gebucht wenn die Versicherung die Gebühren tatsächlich überweist.
+- NIEMALS RVG-Positionen über `erstelle_zahlungspositionen` anlegen — ausschließlich `berechne_rvg` nutzen!
+- Wenn User "erstelle Gebühren", "berechne RVG", "Finalabrechnung" oder ähnliches sagt: `berechne_rvg` aufrufen.
+- Diese Positionen sind nach der Erstellung OFFEN — die Versicherung hat die RVG noch NICHT bezahlt.
 - Das Finalschreiben FORDERT die RVG-Zahlung — es bestätigt sie NICHT als eingegangen.
+- NIEMALS `buche_zahlung` direkt für RVG-Positionen aufrufen!
+  Stattdessen: `buche_rvg_zahlung` — bucht alle drei Positionen auf einmal als bezahlt.
+  Nutze `buche_rvg_zahlung` wenn User sagt: "RVG ist eingegangen", "Gebühren wurden bezahlt",
+  "Versicherung hat die Anwaltskosten überwiesen" o.ä.
 
 ANDERE AKTIONEN (Aufgabe erstellen, Status ändern):
 - AUFGABE ERSTELLEN: Rufe `erstelle_aufgabe` SOFORT auf wenn der User eine Aufgabe erstellen möchte — kein Bestätigungsschritt notwendig. Falls der User kein Datum nennt, frage zuerst "Bis wann?" und warte auf die Antwort, bevor du das Tool aufrufst.
@@ -1585,7 +1616,7 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                     },
                     {
                         "name": "berechne_rvg",
-                        "description": "RVG-Gebühren berechnen UND das RVG-Abschlussschreiben direkt erstellen. Das Backend generiert den Brief automatisch mit Standardvorlage — KEIN anschließender erstelle_brief-Aufruf nötig! IMMER aufrufen wenn der User ein RVG-Schreiben anfordert — auch wenn es bereits existiert, da der User einen neuen Brief erzeugen möchte. Nach diesem Tool-Aufruf einfach dem User bestätigen dass der Brief erstellt wurde.",
+                        "description": "RVG-Gebühren für eine Akte berechnen und drei Zahlungspositionen anlegen (1,3 Geschäftsgebühr + Auslagenpauschale + 19% USt). Erstellt außerdem das RVG-Abschlussschreiben automatisch — KEIN erstelle_brief danach nötig! IMMER aufrufen wenn: (1) User RVG-Gebühren erstellen/berechnen möchte, (2) User ein RVG-Schreiben anfordert, (3) Finalabrechnung. NIEMALS erstelle_zahlungspositionen für RVG nutzen — ausschließlich dieses Tool!",
                         "parameters": {
                             "type": "OBJECT",
                             "properties": {
@@ -1666,6 +1697,22 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                         }
                     },
                     {
+                        "name": "buche_rvg_zahlung",
+                        "description": (
+                            "RVG-Zahlungseingang buchen — wenn die Versicherung die Rechtsanwaltsgebühren überwiesen hat. "
+                            "Bucht automatisch alle drei RVG-Positionen (Geschäftsgebühr + Auslagenpauschale + USt) als vollständig bezahlt. "
+                            "IMMER dieses Tool nutzen wenn der User sagt 'RVG ist eingegangen', 'Gebühren wurden bezahlt', "
+                            "'Versicherung hat die Anwaltskosten überwiesen' o.ä. — NIEMALS buche_zahlung 3× manuell aufrufen!"
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "akte_id": {"type": "INTEGER", "description": "Die Akte-ID"},
+                            },
+                            "required": ["akte_id"]
+                        }
+                    },
+                    {
                         "name": "deaktiviere_zahlungsposition",
                         "description": (
                             "Eine Zahlungsposition deaktivieren (wird aus Gegenstandswert und Saldo rausgerechnet). "
@@ -1679,6 +1726,40 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                                 "zahlungsposition_id": {"type": "INTEGER", "description": "ID der zu deaktivierenden Position aus den FINANZDATEN (Feld 'id')"},
                             },
                             "required": ["zahlungsposition_id"]
+                        }
+                    },
+                    {
+                        "name": "aktualisiere_zahlungsabgleich",
+                        "description": (
+                            "Zahlungsabgleich für eine Zahlungsposition erstellen oder aktualisieren. "
+                            "Nutze dies wenn eine Zahlung eingegangen ist und der Zahlungsstatus samt Details "
+                            "(Betrag, Datum, Empfänger, Weiterleitung) im Finanzsystem festgehalten werden soll. "
+                            "Falls der eingegangene Betrag kleiner als der SOLL-Betrag ist (Kürzung), "
+                            "rufe DANACH zusätzlich `erstelle_aufgabe` auf: "
+                            "Titel 'Kürzung erkannt – bitte prüfen', Priorität 'hoch'."
+                        ),
+                        "parameters": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "position_id": {"type": "INTEGER", "description": "ID der Zahlungsposition (aus FINANZDATEN)"},
+                                "zahlungsstatus": {
+                                    "type": "STRING",
+                                    "enum": ["OFFEN", "EINGEGANGEN", "ANGEFOCHTEN", "GEKUERZT_AKZEPTIERT", "WEITERGELEITET", "DIREKT_BEZAHLT", "ERLEDIGT"],
+                                    "description": "Zahlungsstatus: EINGEGANGEN wenn Betrag einging, WEITERGELEITET wenn an Mandant weitergeleitet, ANGEFOCHTEN bei Widerspruch, DIREKT_BEZAHLT wenn direkt an Dritten (Werkstatt/SV) gezahlt"
+                                },
+                                "eingegangen_betrag": {"type": "NUMBER", "description": "Tatsächlich eingegangener Betrag in Euro"},
+                                "eingegangen_datum": {"type": "STRING", "description": "Datum des Zahlungseingangs YYYY-MM-DD"},
+                                "empfaenger": {
+                                    "type": "STRING",
+                                    "enum": ["KANZLEI", "WERKSTATT", "SV", "MANDANT", "SONSTIGER"],
+                                    "description": "Wer hat das Geld empfangen? KANZLEI = Zahlung kam auf Kanzleikonto"
+                                },
+                                "empfaenger_name": {"type": "STRING", "description": "Name des Empfängers (bei WERKSTATT/SV/SONSTIGER), z.B. 'Werkstatt Huber GmbH'"},
+                                "weiterleitung_betrag": {"type": "NUMBER", "description": "Betrag der an Mandant weitergeleitet wurde (nur bei WEITERGELEITET)"},
+                                "weiterleitung_datum": {"type": "STRING", "description": "Datum der Weiterleitung YYYY-MM-DD (nur bei WEITERGELEITET)"},
+                                "notiz": {"type": "STRING", "description": "Interne Notiz, z.B. Referenznummer der Versicherung oder Abweichungsgrund"}
+                            },
+                            "required": ["position_id", "zahlungsstatus"]
                         }
                     },
                     {
