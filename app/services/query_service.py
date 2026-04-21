@@ -1500,6 +1500,251 @@ Beginne jetzt mit "BETREFF:"."""
             "goldstandard_count": len(gs_matches),
         }
 
+    async def match_bankbewegungen(
+        self,
+        bankbewegungen: list[dict],
+        offene_forderungen: list[dict],
+        akten_index: list[dict],
+    ) -> dict:
+        """
+        Loki Bank-Matching (Task: LOKI_BANK_MATCHING).
+
+        Nimmt offene Bankbewegungen + offene Zahlungsabgleiche + Akten-Index und
+        liefert strukturierte Match-Vorschläge (Bewegung → Forderung) mit
+        Confidence + Begründung zurück. KEIN Auto-Apply — Backend gibt die
+        Vorschläge ans Frontend, User bestätigt.
+
+        Strategie (im Prompt):
+          1. Aktenzeichen-Match im Verwendungszweck (höchste Confidence)
+          2. AZ + Betrag teilweise → Teilzahlung
+          3. Mandantenname-Match + Betrag-Match
+          4. Reiner Betrags-Match → sehr niedrige Confidence
+          5. Negativbetrag (Ausgang) → nur vorschlagen wenn plausibel
+
+        temperature=0.1 (deterministisch, keine Kreativität nötig)
+        """
+        import json as _json
+        from app.main import get_gemini_client
+        gemini = get_gemini_client()
+        if not gemini:
+            return {
+                "status": "error",
+                "error": "KI-Dienst nicht bereit.",
+                "vorschlaege": [],
+                "gesamt_analysiert": 0,
+                "gesamt_vorgeschlagen": 0,
+                "gesamt_unklar": 0,
+            }
+
+        if not bankbewegungen:
+            return {
+                "status": "ok",
+                "vorschlaege": [],
+                "gesamt_analysiert": 0,
+                "gesamt_vorgeschlagen": 0,
+                "gesamt_unklar": 0,
+            }
+
+        # Kompaktes JSON-Paket aufbauen (nur relevante Felder, keine NoneNamen)
+        paket = {
+            "bankbewegungen": bankbewegungen,
+            "offene_forderungen": offene_forderungen,
+            "akten_index": akten_index,
+        }
+        paket_json = _json.dumps(paket, ensure_ascii=False, default=str)
+
+        system_prompt = """Du bist ein präziser Buchhaltungs-Assistent einer Rechtsanwaltskanzlei.
+Deine Aufgabe: Bankbewegungen (CSV-Zeilen aus einem Kontoauszug) den offenen
+Forderungen (Zahlungsabgleiche von Akten) zuordnen.
+
+MATCHING-REGELN — strikt in dieser Reihenfolge prüfen:
+
+1) AKTENZEICHEN-MATCH (höchste Priorität, confidence 0.9–0.98)
+   Regex: \\b\\d{1,3}\\.\\d{2}\\.[A-Za-z]{2,4}\\b (z.B. "17.26.awr", "8.25.awr")
+   - AZ exakt im Verwendungszweck UND Betrag matcht Soll-Betrag einer Position der Akte
+     → confidence 0.95–0.98
+   - AZ exakt, aber Betrag weicht ab (Teilzahlung möglich)
+     → confidence 0.75–0.85, reason erwähnt "Teilzahlung" oder "Betrag abweichend"
+
+2) MANDANTENNAME-MATCH (confidence 0.7–0.85)
+   - Kein AZ im Verwendungszweck, aber "auftraggeber" enthält Mandantennamen
+     einer Akte aus akten_index UND Betrag matcht eine Position der Akte
+     → confidence 0.75–0.85
+
+3) NUR BETRAGS-MATCH (confidence < 0.5)
+   - Keinerlei eindeutige Kennung, nur Betrag gleich → confidence ≤ 0.4
+   - Lieber zahlungsabgleich_id = null und "unklar" melden
+
+4) NEGATIVBETRAG (Ausgang, betrag < 0)
+   - Nur wenn plausibel eine Weiterleitung an Mandant (z.B. Auszahlung)
+     einer Akte zugeordnet werden kann → sonst zahlungsabgleich_id = null
+   - Standardmäßig confidence ≤ 0.5 für Ausgänge
+
+ABSOLUT VERBOTEN:
+- Keine erfundenen zahlungsabgleich_ids — nur IDs aus "offene_forderungen" verwenden.
+- Kein Match aus Bauchgefühl. Bei Unsicherheit: zahlungsabgleich_id = null,
+  confidence = 0.0, reason = kurze Begründung warum unklar.
+- Keine Zuordnung derselben zahlungsabgleich_id an mehrere Bankbewegungen
+  (außer Teilzahlungen mit expliziter Begründung).
+
+ANTWORT-FORMAT — NUR valides JSON, KEIN Markdown, KEINE Erklärung drumherum:
+
+{
+  "vorschlaege": [
+    {
+      "bankbewegung_id": 5,
+      "zahlungsabgleich_id": 12,
+      "confidence": 0.95,
+      "reason": "AZ 17.26.awr im Verwendungszweck + Betrag 1300€ matcht Position 'Wertminderung' exakt"
+    },
+    {
+      "bankbewegung_id": 7,
+      "zahlungsabgleich_id": null,
+      "confidence": 0.0,
+      "reason": "Kein AZ, Auftraggeber 'Klaus-Peter Pehr' nicht in Mandanten-Liste — kein Mandantenfall"
+    }
+  ]
+}
+
+Für JEDE Bankbewegung aus dem Input MUSS genau ein Eintrag im Array vorkommen
+(auch wenn zahlungsabgleich_id = null)."""
+
+        user_prompt = f"""INPUT-DATEN:
+
+{paket_json}
+
+Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
+
+        from google.genai import types as genai_types
+        config = genai_types.GenerateContentConfig(
+            system_instruction=system_prompt,
+            temperature=0.1,
+            response_mime_type="application/json",
+            thinking_config=genai_types.ThinkingConfig(include_thoughts=False),
+        )
+
+        try:
+            response = await gemini.client.aio.models.generate_content(
+                model=gemini.model_name,
+                contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
+                config=config,
+            )
+        except Exception as e:
+            err_str = str(e)
+            logger.error(f"match_bankbewegungen Gemini-Call fehlgeschlagen: {err_str}")
+            return {
+                "status": "error",
+                "error": f"Gemini-Call fehlgeschlagen: {err_str[:200]}",
+                "vorschlaege": [],
+                "gesamt_analysiert": len(bankbewegungen),
+                "gesamt_vorgeschlagen": 0,
+                "gesamt_unklar": 0,
+            }
+
+        try:
+            raw_text = (response.text or "").strip()
+        except Exception:
+            raw_text = ""
+
+        if not raw_text:
+            return {
+                "status": "error",
+                "error": "Leere Antwort von Gemini.",
+                "vorschlaege": [],
+                "gesamt_analysiert": len(bankbewegungen),
+                "gesamt_vorgeschlagen": 0,
+                "gesamt_unklar": 0,
+            }
+
+        # Markdown-Wrapper abschneiden falls Gemini es doch zurückgibt
+        if raw_text.startswith("```"):
+            raw_text = raw_text.strip("`")
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+
+        try:
+            parsed = _json.loads(raw_text)
+        except Exception as e:
+            logger.error(f"match_bankbewegungen JSON-Parse fehlgeschlagen: {e} | Raw: {raw_text[:300]}")
+            return {
+                "status": "error",
+                "error": f"Antwort nicht als JSON parsbar: {str(e)[:200]}",
+                "vorschlaege": [],
+                "gesamt_analysiert": len(bankbewegungen),
+                "gesamt_vorgeschlagen": 0,
+                "gesamt_unklar": 0,
+            }
+
+        raw_vorschlaege = parsed.get("vorschlaege") if isinstance(parsed, dict) else parsed
+        if not isinstance(raw_vorschlaege, list):
+            return {
+                "status": "error",
+                "error": "Gemini-Antwort enthält kein 'vorschlaege' Array.",
+                "vorschlaege": [],
+                "gesamt_analysiert": len(bankbewegungen),
+                "gesamt_vorgeschlagen": 0,
+                "gesamt_unklar": 0,
+            }
+
+        # Validieren: IDs gegen Input prüfen, Halluzinationen rausfiltern
+        gueltige_bew_ids = {int(b.get("id")) for b in bankbewegungen if b.get("id") is not None}
+        gueltige_abg_ids = {int(f.get("zahlungsabgleich_id")) for f in offene_forderungen if f.get("zahlungsabgleich_id") is not None}
+
+        geprueft: list[dict] = []
+        for v in raw_vorschlaege:
+            if not isinstance(v, dict):
+                continue
+            try:
+                bew_id = int(v.get("bankbewegung_id"))
+            except Exception:
+                continue
+            if bew_id not in gueltige_bew_ids:
+                continue
+
+            abg_id_raw = v.get("zahlungsabgleich_id")
+            if abg_id_raw is None:
+                abg_id = None
+            else:
+                try:
+                    abg_id_int = int(abg_id_raw)
+                    abg_id = abg_id_int if abg_id_int in gueltige_abg_ids else None
+                except Exception:
+                    abg_id = None
+
+            try:
+                conf = float(v.get("confidence", 0.0))
+            except Exception:
+                conf = 0.0
+            conf = max(0.0, min(1.0, conf))
+            if abg_id is None:
+                conf = min(conf, 0.5)
+
+            reason = str(v.get("reason", "")).strip()[:500]
+
+            geprueft.append({
+                "bankbewegung_id": bew_id,
+                "zahlungsabgleich_id": abg_id,
+                "confidence": round(conf, 3),
+                "reason": reason,
+            })
+
+        vorgeschlagen = sum(1 for v in geprueft if v["zahlungsabgleich_id"] is not None)
+        unklar = sum(1 for v in geprueft if v["zahlungsabgleich_id"] is None)
+
+        logger.info(
+            f"match_bankbewegungen: analysiert={len(bankbewegungen)}, "
+            f"vorgeschlagen={vorgeschlagen}, unklar={unklar}"
+        )
+
+        return {
+            "status": "ok",
+            "vorschlaege": geprueft,
+            "gesamt_analysiert": len(bankbewegungen),
+            "gesamt_vorgeschlagen": vorgeschlagen,
+            "gesamt_unklar": unklar,
+        }
+
     async def handle_akte_chat(
         self,
         akte_id: int,

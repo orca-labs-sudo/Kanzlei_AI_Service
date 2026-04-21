@@ -1470,6 +1470,47 @@ async def handle_query(request: QueryRequest):
         )
 
 
+@app.post("/api/actions/match_bankbewegungen", dependencies=[Depends(verify_hmac)])
+async def match_bankbewegungen(request: Request):
+    """
+    Loki Bank-Matching (Task: LOKI_BANK_MATCHING).
+    Erwartet:
+      {
+        "bankbewegungen": [...],
+        "offene_forderungen": [...],
+        "akten_index": [...]
+      }
+    Liefert:
+      {
+        "status": "ok",
+        "vorschlaege": [{bankbewegung_id, zahlungsabgleich_id, confidence, reason}, ...],
+        "gesamt_analysiert": N, "gesamt_vorgeschlagen": M, "gesamt_unklar": K
+      }
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Ungültiges JSON im Request Body.")
+
+    bankbewegungen = body.get("bankbewegungen") or []
+    offene_forderungen = body.get("offene_forderungen") or []
+    akten_index = body.get("akten_index") or []
+
+    if not isinstance(bankbewegungen, list) or not isinstance(offene_forderungen, list) or not isinstance(akten_index, list):
+        raise HTTPException(status_code=400, detail="bankbewegungen, offene_forderungen, akten_index müssen Listen sein.")
+
+    try:
+        result = await query_service.match_bankbewegungen(
+            bankbewegungen=bankbewegungen,
+            offene_forderungen=offene_forderungen,
+            akten_index=akten_index,
+        )
+        return result
+    except Exception as e:
+        logger.error(f"Fehler in /api/actions/match_bankbewegungen: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Bank-Matching fehlgeschlagen: {str(e)}")
+
+
 @app.post("/api/chat/", dependencies=[Depends(verify_hmac)])
 async def akte_chat(request: Request):
     """
