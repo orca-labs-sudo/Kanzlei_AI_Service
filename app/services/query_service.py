@@ -2170,43 +2170,48 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                 }
             raise
 
-        def _find_fc(resp):
-            """Sucht in ALLEN Parts nach einem Function-Call."""
+        def _find_all_fcs(resp):
+            """Sammelt ALLE Function-Calls aus dem Response (für parallele Tool-Nutzung)."""
             if not resp.candidates:
-                return None
+                return []
+            fcs = []
             for part in (resp.candidates[0].content.parts or []):
                 fc = getattr(part, 'function_call', None)
                 if fc and getattr(fc, 'name', None):
-                    return fc
-            return None
+                    fcs.append(fc)
+            return fcs
 
         actions_taken = []
         while True:
-            fc = _find_fc(response)
+            fcs = _find_all_fcs(response)
 
-            if fc is None:
+            if not fcs:
                 break  # Kein Tool-Call → fertig (Text-Antwort folgt)
 
-            try:
-                fc_args_dict = {k: v for k, v in fc.args.items()}
-            except Exception:
-                fc_args_dict = dict(fc.args)
+            # Alle FCs ausführen (Gemini kann mehrere parallel senden)
+            # WICHTIG: Anzahl FunctionResponses MUSS == Anzahl FunctionCalls sein (Vertex 400 sonst)
+            response_parts = []
+            for fc in fcs:
+                try:
+                    fc_args_dict = {k: v for k, v in fc.args.items()}
+                except Exception:
+                    fc_args_dict = dict(fc.args)
 
-            # Gemini vergisst manchmal akte_id — aus Kontext auffüllen
-            if "akte_id" not in fc_args_dict or not fc_args_dict.get("akte_id"):
-                fc_args_dict["akte_id"] = akte_id
+                # Gemini vergisst manchmal akte_id — aus Kontext auffüllen
+                if "akte_id" not in fc_args_dict or not fc_args_dict.get("akte_id"):
+                    fc_args_dict["akte_id"] = akte_id
 
-            tool_result = await self._execute_chat_tool(fc.name, fc_args_dict)
-            actions_taken.append({"tool": fc.name, "result": tool_result})
+                tool_result = await self._execute_chat_tool(fc.name, fc_args_dict)
+                actions_taken.append({"tool": fc.name, "result": tool_result})
 
-            contents.append(response.candidates[0].content)  # type: ignore[union-attr]
-            contents.append(genai_types.Content(
-                role="user",
-                parts=[genai_types.Part(function_response=genai_types.FunctionResponse(
+                response_parts.append(genai_types.Part(function_response=genai_types.FunctionResponse(
                     name=fc.name,
                     response={"result": tool_result}
-                ))]
-            ))
+                )))
+
+            contents.append(response.candidates[0].content)  # type: ignore[union-attr]
+            contents.append(genai_types.Content(role="user", parts=response_parts))
+
             try:
                 response = await gemini.client.aio.models.generate_content(
                     model=gemini.model_name, contents=contents, config=config,
