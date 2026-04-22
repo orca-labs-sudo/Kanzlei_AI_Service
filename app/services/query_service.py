@@ -1624,14 +1624,17 @@ Für JEDE Bankbewegung aus dem Input MUSS genau ein Eintrag im Array vorkommen
 Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
 
         from google.genai import types as genai_types
-        # max_output_tokens hoch setzen: bei ~60 Bewegungen * ~120 Tokens/Eintrag
-        # landet man schnell bei 7k+. Default-Limits schneiden ab → JSON kaputt.
+        # Thinking KOMPLETT deaktivieren (thinking_budget=0): Matching ist eine
+        # deterministische Tabellen-Aufgabe, Thinking bringt nichts und frisst
+        # nur max_output_tokens. Mit Thinking enabled waren 32k Tokens regelmäßig
+        # aufgebraucht bevor überhaupt Text kam → raw_len=0, MAX_TOKENS.
+        # max_output_tokens bleibt großzügig: ~60 Bewegungen * ~120 Tokens = 7k+.
         config = genai_types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=0.1,
             response_mime_type="application/json",
-            max_output_tokens=32768,
-            thinking_config=genai_types.ThinkingConfig(include_thoughts=False),
+            max_output_tokens=16384,
+            thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
         )
 
         try:
