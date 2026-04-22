@@ -1524,7 +1524,9 @@ Beginne jetzt mit "BETREFF:"."""
         temperature=0.1 (deterministisch, keine Kreativität nötig)
         """
         import json as _json
+        import time as _time
         from app.main import get_gemini_client
+        _t_start = _time.perf_counter()
         gemini = get_gemini_client()
         if not gemini:
             return {
@@ -1552,6 +1554,12 @@ Beginne jetzt mit "BETREFF:"."""
             "akten_index": akten_index,
         }
         paket_json = _json.dumps(paket, ensure_ascii=False, default=str)
+        logger.info(
+            f"match_bankbewegungen: Prompt-Paket gebaut in "
+            f"{_time.perf_counter() - _t_start:.2f}s, "
+            f"paket_bytes={len(paket_json)}, bewegungen={len(bankbewegungen)}, "
+            f"forderungen={len(offene_forderungen)}, akten={len(akten_index)}"
+        )
 
         system_prompt = """Du bist ein präziser Buchhaltungs-Assistent einer Rechtsanwaltskanzlei.
 Deine Aufgabe: Bankbewegungen (CSV-Zeilen aus einem Kontoauszug) den offenen
@@ -1616,18 +1624,26 @@ Für JEDE Bankbewegung aus dem Input MUSS genau ein Eintrag im Array vorkommen
 Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
 
         from google.genai import types as genai_types
+        # max_output_tokens hoch setzen: bei ~60 Bewegungen * ~120 Tokens/Eintrag
+        # landet man schnell bei 7k+. Default-Limits schneiden ab → JSON kaputt.
         config = genai_types.GenerateContentConfig(
             system_instruction=system_prompt,
             temperature=0.1,
             response_mime_type="application/json",
+            max_output_tokens=32768,
             thinking_config=genai_types.ThinkingConfig(include_thoughts=False),
         )
 
         try:
+            _t_gemini = _time.perf_counter()
             response = await gemini.client.aio.models.generate_content(
                 model=gemini.model_name,
                 contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
                 config=config,
+            )
+            logger.info(
+                f"match_bankbewegungen: Gemini-Call fertig in "
+                f"{_time.perf_counter() - _t_gemini:.2f}s"
             )
         except Exception as e:
             err_str = str(e)
@@ -1641,15 +1657,31 @@ Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
                 "gesamt_unklar": 0,
             }
 
+        # Finish-Reason prüfen (Abschneide-Erkennung)
+        finish_reason = None
+        try:
+            cand = response.candidates[0] if response.candidates else None
+            if cand and getattr(cand, "finish_reason", None):
+                finish_reason = str(cand.finish_reason)
+        except Exception:
+            pass
+
         try:
             raw_text = (response.text or "").strip()
         except Exception:
             raw_text = ""
 
+        logger.info(
+            f"match_bankbewegungen Gemini-Response: finish_reason={finish_reason}, "
+            f"raw_len={len(raw_text)}, bewegungen={len(bankbewegungen)}, "
+            f"forderungen={len(offene_forderungen)}"
+        )
+
         if not raw_text:
+            logger.error(f"match_bankbewegungen Leere Antwort | finish_reason={finish_reason}")
             return {
                 "status": "error",
-                "error": "Leere Antwort von Gemini.",
+                "error": f"Leere Antwort von Gemini (finish_reason={finish_reason}).",
                 "vorschlaege": [],
                 "gesamt_analysiert": len(bankbewegungen),
                 "gesamt_vorgeschlagen": 0,
@@ -1666,10 +1698,19 @@ Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
         try:
             parsed = _json.loads(raw_text)
         except Exception as e:
-            logger.error(f"match_bankbewegungen JSON-Parse fehlgeschlagen: {e} | Raw: {raw_text[:300]}")
+            # Vollständigen Raw-Dump loggen — bei abgeschnittenen Antworten sehen
+            # wir so sofort, WO die Antwort endet und ob finish_reason=MAX_TOKENS war.
+            logger.error(
+                f"match_bankbewegungen JSON-Parse fehlgeschlagen: {e} | "
+                f"finish_reason={finish_reason} | raw_len={len(raw_text)} | "
+                f"raw_head={raw_text[:500]!r} | raw_tail={raw_text[-500:]!r}"
+            )
+            hint = ""
+            if finish_reason and "MAX_TOKENS" in finish_reason.upper():
+                hint = " — Antwort wurde wegen Token-Limit abgeschnitten."
             return {
                 "status": "error",
-                "error": f"Antwort nicht als JSON parsbar: {str(e)[:200]}",
+                "error": f"Antwort nicht als JSON parsbar: {str(e)[:200]}{hint}",
                 "vorschlaege": [],
                 "gesamt_analysiert": len(bankbewegungen),
                 "gesamt_vorgeschlagen": 0,
@@ -1734,8 +1775,36 @@ Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
 
         logger.info(
             f"match_bankbewegungen: analysiert={len(bankbewegungen)}, "
-            f"vorgeschlagen={vorgeschlagen}, unklar={unklar}"
+            f"vorgeschlagen={vorgeschlagen}, unklar={unklar}, "
+            f"raw_items={len(raw_vorschlaege)}, geprueft={len(geprueft)}"
         )
+
+        # Verdächtiger Fall: Gemini hätte laut Prompt für JEDE Bewegung einen
+        # Eintrag liefern müssen. Wenn vorgeschlagen=0 UND unklar=0 trotz
+        # analysiert>0 → Prompt nicht befolgt oder Antwort im Validator
+        # komplett rausgefiltert. Als Fehler markieren, damit Frontend das
+        # dem User anzeigen kann.
+        if vorgeschlagen == 0 and unklar == 0 and len(bankbewegungen) > 0:
+            logger.warning(
+                f"match_bankbewegungen: Leere Vorschlagsliste trotz "
+                f"{len(bankbewegungen)} Bewegungen. finish_reason={finish_reason}, "
+                f"raw_items={len(raw_vorschlaege)}"
+            )
+            hint = ""
+            if finish_reason and "MAX_TOKENS" in finish_reason.upper():
+                hint = " — Antwort wurde wegen Token-Limit abgeschnitten."
+            elif len(raw_vorschlaege) == 0:
+                hint = " — Gemini hat ein leeres Array geliefert (Prompt nicht befolgt)."
+            else:
+                hint = f" — {len(raw_vorschlaege)} Einträge lieferten keine gültigen IDs."
+            return {
+                "status": "error",
+                "error": f"Loki hat keine Ergebnisse geliefert{hint}",
+                "vorschlaege": [],
+                "gesamt_analysiert": len(bankbewegungen),
+                "gesamt_vorgeschlagen": 0,
+                "gesamt_unklar": 0,
+            }
 
         return {
             "status": "ok",
