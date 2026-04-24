@@ -1565,6 +1565,20 @@ Beginne jetzt mit "BETREFF:"."""
 Deine Aufgabe: Bankbewegungen (CSV-Zeilen aus einem Kontoauszug) den offenen
 Forderungen (Zahlungsabgleiche von Akten) zuordnen.
 
+KLASSIFIKATIONS-REGELN FÜR BUCHUNGSTYP:
+- EINGANG (Standard): Versicherung/Drittpartei zahlt an Kanzlei.
+  Bewegung positiv (betrag > 0) UND Auftraggeber ist eine Versicherung oder Gericht oder Schuldner. Wie bisher matchen.
+- WEITERLEITUNG: Kanzlei zahlt eingegangenes Geld an den Mandanten weiter.
+  Bewegung negativ (betrag < 0) UND Auftraggeber-Name = Mandantenname (oder ähnlich) einer Akte aus akten_index, die zuvor einen passenden Eingang bekommen hat oder eine offene Forderung mit ähnlichem Betrag hat.
+  → zahlungsabgleich_id soll auf die GLEICHE Position zeigen wie der korrespondierende Eingang.
+  → confidence 0.85–0.95 wenn Mandant + Betrag matchen.
+- GEBUEHR: Bankgebühren, Kontoführung, Buchungsentgelt, Kartengebühren, Zinsen.
+  Bewegung negativ, Auftraggeber/Verwendungszweck enthält "Kontoführung", "Rechnungsabschluss", "Zinsen", "Buchungsentgelt", "Kartengebühr" o.ä.
+  → zahlungsabgleich_id = null
+  → confidence 0.0
+  → reason erklärt warum (Bankgebühr, keine Akte)
+- Sonstige negative Beträge ohne Mandant-Match → wie bisher: unklar mit zahlungsabgleich_id = null.
+
 MATCHING-REGELN — strikt in dieser Reihenfolge prüfen:
 
 1) AKTENZEICHEN-MATCH (höchste Priorität, confidence 0.9–0.98)
@@ -1584,9 +1598,7 @@ MATCHING-REGELN — strikt in dieser Reihenfolge prüfen:
    - Lieber zahlungsabgleich_id = null und "unklar" melden
 
 4) NEGATIVBETRAG (Ausgang, betrag < 0)
-   - Nur wenn plausibel eine Weiterleitung an Mandant (z.B. Auszahlung)
-     einer Akte zugeordnet werden kann → sonst zahlungsabgleich_id = null
-   - Standardmäßig confidence ≤ 0.5 für Ausgänge
+   - Siehe Klassifikations-Regeln (WEITERLEITUNG, GEBUEHR, oder unklar)
 
 ABSOLUT VERBOTEN:
 - Keine erfundenen zahlungsabgleich_ids — nur IDs aus "offene_forderungen" verwenden.
@@ -1603,13 +1615,22 @@ ANTWORT-FORMAT — NUR valides JSON, KEIN Markdown, KEINE Erklärung drumherum:
       "bankbewegung_id": 5,
       "zahlungsabgleich_id": 12,
       "confidence": 0.95,
+      "buchungstyp": "EINGANG",
       "reason": "AZ 17.26.awr im Verwendungszweck + Betrag 1300€ matcht Position 'Wertminderung' exakt"
     },
     {
-      "bankbewegung_id": 7,
+      "bankbewegung_id": 9,
+      "zahlungsabgleich_id": 12,
+      "confidence": 0.9,
+      "buchungstyp": "WEITERLEITUNG",
+      "reason": "Negativbetrag -1300€ an Mandant 'Müller' — Weiterleitung der Wertminderung"
+    },
+    {
+      "bankbewegung_id": 3,
       "zahlungsabgleich_id": null,
       "confidence": 0.0,
-      "reason": "Kein AZ, Auftraggeber 'Klaus-Peter Pehr' nicht in Mandanten-Liste — kein Mandantenfall"
+      "buchungstyp": "GEBUEHR",
+      "reason": "Bankgebühr 'Kontoführung' — keine Akte betroffen"
     }
   ]
 }
@@ -1761,6 +1782,21 @@ Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
             except Exception:
                 conf = 0.0
             conf = max(0.0, min(1.0, conf))
+            b_typ = str(v.get("buchungstyp", "")).strip().upper()
+            if b_typ not in ["EINGANG", "WEITERLEITUNG", "GEBUEHR"]:
+                betrag = 0.0
+                for bew in bankbewegungen:
+                    if bew.get("id") == bew_id:
+                        try:
+                            betrag = float(bew.get("betrag", 0.0))
+                        except Exception:
+                            pass
+                        break
+                b_typ = "EINGANG" if betrag > 0 else "OFFEN"
+            
+            if b_typ == "GEBUEHR":
+                abg_id = None
+
             if abg_id is None:
                 conf = min(conf, 0.5)
 
@@ -1770,15 +1806,18 @@ Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
                 "bankbewegung_id": bew_id,
                 "zahlungsabgleich_id": abg_id,
                 "confidence": round(conf, 3),
+                "buchungstyp": b_typ,
                 "reason": reason,
             })
 
         vorgeschlagen = sum(1 for v in geprueft if v["zahlungsabgleich_id"] is not None)
-        unklar = sum(1 for v in geprueft if v["zahlungsabgleich_id"] is None)
+        n_weiter = sum(1 for v in geprueft if v["buchungstyp"] == "WEITERLEITUNG")
+        n_gebuehr = sum(1 for v in geprueft if v["buchungstyp"] == "GEBUEHR")
+        unklar = sum(1 for v in geprueft if v["zahlungsabgleich_id"] is None and v["buchungstyp"] != "GEBUEHR")
 
         logger.info(
             f"match_bankbewegungen: analysiert={len(bankbewegungen)}, "
-            f"vorgeschlagen={vorgeschlagen}, unklar={unklar}, "
+            f"vorgeschlagen={vorgeschlagen}, weiterleitungen={n_weiter}, gebuehren={n_gebuehr}, unklar={unklar}, "
             f"raw_items={len(raw_vorschlaege)}, geprueft={len(geprueft)}"
         )
 
