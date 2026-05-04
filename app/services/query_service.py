@@ -1658,28 +1658,39 @@ Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
             thinking_config=genai_types.ThinkingConfig(thinking_budget=0),
         )
 
-        try:
-            _t_gemini = _time.perf_counter()
-            response = await gemini.client.aio.models.generate_content(
-                model=gemini.model_name,
-                contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
-                config=config,
-            )
-            logger.info(
-                f"match_bankbewegungen: Gemini-Call fertig in "
-                f"{_time.perf_counter() - _t_gemini:.2f}s"
-            )
-        except Exception as e:
-            err_str = str(e)
-            logger.error(f"match_bankbewegungen Gemini-Call fehlgeschlagen: {err_str}")
-            return {
-                "status": "error",
-                "error": f"Gemini-Call fehlgeschlagen: {err_str[:200]}",
-                "vorschlaege": [],
-                "gesamt_analysiert": len(bankbewegungen),
-                "gesamt_vorgeschlagen": 0,
-                "gesamt_unklar": 0,
-            }
+        import asyncio as _asyncio
+        _t_gemini = _time.perf_counter()
+        response = None
+        _retry_waits = [20, 40]  # Sekunden zwischen Versuchen bei 429
+        for _attempt in range(3):
+            try:
+                response = await gemini.client.aio.models.generate_content(
+                    model=gemini.model_name,
+                    contents=[{"role": "user", "parts": [{"text": user_prompt}]}],
+                    config=config,
+                )
+                logger.info(
+                    f"match_bankbewegungen: Gemini-Call fertig in "
+                    f"{_time.perf_counter() - _t_gemini:.2f}s (Versuch {_attempt + 1})"
+                )
+                break
+            except Exception as e:
+                err_str = str(e)
+                is_quota = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower()
+                if is_quota and _attempt < 2:
+                    wait = _retry_waits[_attempt]
+                    logger.warning(f"match_bankbewegungen: 429 Quota — warte {wait}s, Retry {_attempt + 2}/3...")
+                    await _asyncio.sleep(wait)
+                    continue
+                logger.error(f"match_bankbewegungen Gemini-Call fehlgeschlagen: {err_str}")
+                return {
+                    "status": "error",
+                    "error": f"Gemini-Call fehlgeschlagen: {err_str[:200]}",
+                    "vorschlaege": [],
+                    "gesamt_analysiert": len(bankbewegungen),
+                    "gesamt_vorgeschlagen": 0,
+                    "gesamt_unklar": 0,
+                }
 
         # Finish-Reason prüfen (Abschneide-Erkennung)
         finish_reason = None
