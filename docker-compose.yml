@@ -18,8 +18,7 @@ services:
       - ./scripts:/app/scripts
       - ./rag_data:/app/rag_data
       - ./google_service_account.json:/app/google_service_account.json:ro
-    # Override command for development to enable reload
-    command: uvicorn app.main:app --host 0.0.0.0 --port 5000 --reload
+    command: uvicorn app.main:app --host 0.0.0.0 --port 5000
     restart: unless-stopped
     networks:
       - kanzlei-network
