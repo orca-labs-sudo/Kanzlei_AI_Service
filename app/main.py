@@ -58,12 +58,6 @@ class VerifyDocumentRequest(BaseModel):
     akte_id: int
     textzeilen: list[str]
 
-class EmailSendenRequest(BaseModel):
-    an: str
-    betreff: str
-    text: str
-
-
 class VorlagenSuggestRequest(BaseModel):
     """Request-Modell für POST /api/vorlagen/suggest"""
     vorlage_typ: str                          # versicherung_brief | mandant_info
@@ -627,27 +621,6 @@ async def create_google_doc(request: DocsCreateRequest):
         )
 
 
-@app.get("/api/calendar/events")
-async def get_calendar_events(tage: int = 14):
-    """Gibt die nächsten N Tage Events zurück."""
-    from app.services.google_calendar_client import google_calendar_client
-    events = google_calendar_client.get_upcoming_events(tage=tage)
-    return {"events": events, "count": len(events)}
-
-
-@app.post("/api/email/senden")
-async def email_senden(request: EmailSendenRequest):
-    """
-    Sendet E-Mail direkt (ohne Gemini-Tool-Call).
-    Für zukünftige direkte Frontend-Integration.
-    """
-    from app.services.google_gmail_client import google_gmail_client
-    erfolg = google_gmail_client.send_email(
-        an=request.an,
-        betreff=request.betreff,
-        text=request.text,
-    )
-    return {"gesendet": erfolg}
 
 
 @app.post("/api/rag/draft", dependencies=[Depends(verify_hmac)])
@@ -859,35 +832,6 @@ async def rag_ingest_file(
         )
 
 
-@app.delete("/api/rag/delete/{document_id}", dependencies=[Depends(verify_hmac)])
-async def rag_delete_document(document_id: str):
-    """
-    Löscht alle Chunks für eine bestimmte document_id aus dem RAG Store.
-    """
-    try:
-        from app.services.rag_store import rag_store
-        
-        if not document_id:
-            raise HTTPException(status_code=400, detail="Keine document_id angegeben.")
-            
-        success = rag_store.delete_document(document_id)
-        
-        if not success:
-             raise HTTPException(status_code=500, detail="Fehler beim Löschen des Dokuments aus ChromaDB.")
-             
-        return {
-            "status": "success",
-            "message": f"Dokument {document_id} erfolgreich gelöscht."
-        }
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Fehler beim RAG Delete: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=500,
-            detail=f"Fehler beim Löschen des Dokuments: {str(e)}"
-        )
 
 
 def _classify_attachment(filename: str) -> tuple[str | None, bool]:

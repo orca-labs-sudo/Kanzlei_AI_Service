@@ -268,36 +268,6 @@ TOOL_DECLARATIONS: List[Dict] = [
             "required": ["akte_id", "titel", "datum"],
         }
     },
-    {
-        "name": "sende_email_an_gegner",
-        "description": (
-            "Sendet eine E-Mail an den Gegner (z.B. Versicherung) der aktuellen Akte. "
-            "Wenn der User sagt: 'Schick das an die Allianz' oder "
-            "'E-Mail an den Gegner mit dem Widerspruch'."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "akte_id": {
-                    "type": "integer",
-                    "description": "ID der Akte"
-                },
-                "betreff": {
-                    "type": "string",
-                    "description": "E-Mail-Betreff"
-                },
-                "text": {
-                    "type": "string",
-                    "description": "E-Mail-Text (Fliesstext)"
-                },
-                "dokument_id": {
-                    "type": "integer",
-                    "description": "Optional: ID des anzuhängenden Dokuments"
-                },
-            },
-            "required": ["akte_id", "betreff", "text"],
-        }
-    }
 ]
 
 
@@ -327,10 +297,6 @@ class QueryService:
 
     def __init__(self):
         self.django_base = settings.backend_url.rstrip("/")
-        self.django_headers = {
-            "Authorization": f"Bearer {settings.backend_api_token}",
-            "Content-Type": "application/json",
-        }
 
     async def handle_query(self, query: str, user_id: int, akte_id: Optional[int] = None) -> Dict[str, Any]:
         """
@@ -502,7 +468,6 @@ class QueryService:
             "get_akten_by_gegner": self._get_akten_by_gegner,
             "erstelle_brief_aus_kontext": self._erstelle_brief_aus_kontext,
             "sync_frist_zu_calendar": self._sync_frist_zu_calendar,
-            "sende_email_an_gegner": self._sende_email_an_gegner,
         }
 
         handler = tool_map.get(tool_name)
@@ -529,11 +494,16 @@ class QueryService:
             return None
 
     async def _get(self, path: str, params: Dict = None) -> Any:
-        """Hilfsfunktion: GET-Request an Django /api/ai/query/ mit Bearer-Token."""
+        """Hilfsfunktion: GET-Request an Django /api/ai/query/ mit HMAC-Signatur."""
+        from app.services.hmac_auth import generate_ki_signature
         url = f"{self.django_base}/api/ai/query/{path}"
+        headers = {
+            "X-KI-Signature": generate_ki_signature(),
+            "Content-Type": "application/json",
+        }
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.get(
-                url, params=params or {}, headers=self.django_headers
+                url, params=params or {}, headers=headers
             )
             response.raise_for_status()
             return response.json()
@@ -713,50 +683,6 @@ class QueryService:
                 "message": "Google Calendar nicht konfiguriert."
             }
 
-    async def _sende_email_an_gegner(self, akte_id: int, betreff: str, text: str, dokument_id: int = None):
-        """GM-2 Tool Handler: Sendet eine E-Mail an den Gegner."""
-        from app.services.google_gmail_client import google_gmail_client
-        
-        # 1. Gegner E-Mail aus Akte laden (Wir nutzen den bestehenden /akte_by_id/ API-Pfad 
-        #    bzw. passen die Abfrage soweit nötig an. In Aufgabe wurde erwähnt:
-        #    'GET /api/ai/query/akte_by_id/?akte_id=...' -> wir nehmen _get)
-        try:
-            # Versuche Akte per ID zu laden. Wenn der Endpoint noch nicht existiert,
-            # fangen wir den Fehler ab und geben einen sauberen Hinweis.
-            try:
-                akte_data = await self._get("akte_by_id/", {"akte_id": akte_id})
-            except Exception as e:
-                logger.error(f"Konnte Akte {akte_id} nicht über akte_by_id/ laden: {e}")
-                return {"error": f"Informationen zur Akte {akte_id} konnten zur Zeit nicht geladen werden (Endpoint fehlt?)."}
-                
-            gegner_email = akte_data.get("gegner_email")
-            if not gegner_email:
-                # Falls keine Email da ist
-                return {"error": f"Keine E-Mail-Adresse für den Gegner von Akte {akte_id} hinterlegt."}
-                
-            erfolg = google_gmail_client.send_email(
-                an=gegner_email,
-                betreff=betreff,
-                text=text
-            )
-            
-            if erfolg:
-                return {
-                    "status": "success",
-                    "an": gegner_email,
-                    "betreff": betreff
-                }
-            elif not google_gmail_client.enabled:
-                return {
-                    "status": "mock",
-                    "message": "Gmail nicht konfiguriert — E-Mail nicht gesendet."
-                }
-            else:
-                 return {"error": "Senden der E-Mail fehlgeschlagen."}
-                 
-        except Exception as e:
-            logger.error(f"Fehler in _sende_email_an_gegner: {e}")
-            return {"error": str(e)}
 
     # -----------------------------------------------------------------------
     # Ergebnis-Formatierung → Frontend-Format
@@ -809,32 +735,6 @@ class QueryService:
                     "query_used": tool_name,
                 }
                 
-        if tool_name == "sende_email_an_gegner":
-            if raw_data.get("status") == "success":
-                return {
-                    "status": "ok",
-                    "result_type": "email_gesendet",
-                    "data": {
-                        "an": raw_data.get("an"),
-                        "betreff": raw_data.get("betreff")
-                    },
-                    "query_used": tool_name,
-                }
-            elif raw_data.get("status") == "mock":
-                return {
-                    "status": "ok",
-                    "result_type": "info",
-                    "data": raw_data.get("message"),
-                    "query_used": tool_name,
-                }
-            else:
-                 return {
-                    "status": "error",
-                    "result_type": "fehler",
-                    "data": raw_data.get("error", "Konnte E-Mail nicht senden."),
-                    "query_used": tool_name,
-                }
-
         if tool_name == "get_akte_by_aktenzeichen":
             akte = raw_data.get("akte")
             if not akte:
