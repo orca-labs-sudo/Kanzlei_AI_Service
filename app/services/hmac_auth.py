@@ -6,7 +6,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-TIMESTAMP_TOLERANCE_SECONDS = 300
+TIMESTAMP_TOLERANCE_SECONDS = 60
 
 def generate_ki_signature(timestamp: str = None) -> str:
     """
