@@ -3,7 +3,7 @@ FastAPI Main Application — Kanzlei AI Service
 """
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, BackgroundTasks, Depends, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Any
 import logging
 import logging.handlers
@@ -405,7 +405,7 @@ class RagSearchRequest(BaseModel):
     """Daten für die RAG Suche nach Referenzschreiben"""
     query: str
     fall_typ: Optional[str] = None  # Optionaler Filter
-    k_results: int = 3
+    k_results: int = Field(default=3, ge=1, le=50)
 
 
 @app.post("/api/rag/search", dependencies=[Depends(verify_hmac)])
