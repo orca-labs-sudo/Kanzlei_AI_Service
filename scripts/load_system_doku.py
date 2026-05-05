@@ -67,9 +67,8 @@ async def load_all():
             logger.warning(f"  {filename}: Leer, uebersprungen.")
             continue
 
-        documents = chunks
-        # Batching for add_documents
-        batch_size = 50  # Define a suitable batch size
+        batch_size = 50
+        file_ok = True
         for i in range(0, len(chunks), batch_size):
             chunk_batch = chunks[i : i + batch_size]
             id_batch = [f"sysdoku_{thema}_{j}_{uuid.uuid4().hex[:8]}" for j in range(i, i + len(chunk_batch))]
@@ -77,25 +76,18 @@ async def load_all():
                 {"typ": "system_doku", "thema": thema, "source": filename}
                 for _ in chunk_batch
             ]
-
-            success = await rag_store.add_documents(
+            ok = await rag_store.add_documents(
                 documents=chunk_batch,
                 metadatas=meta_batch,
                 ids=id_batch,
                 collection_name="system_wissen"
             )
+            if not ok:
+                logger.error(f"  {filename}: Fehler beim Laden von Batch {i // batch_size + 1}.")
+                file_ok = False
+                break
 
-            if not success:
-                logger.error(f"  {filename}: Fehler beim Laden von Batch {i//batch_size + 1}.")
-                # Decide whether to continue or break on error
-                # For now, we'll just log and continue to the next batch/file
-                break # Break from inner loop, move to next file
-
-        # The original 'ok' check was for the entire file.
-        # With batching, we need to re-evaluate how 'ok' is determined.
-        # For simplicity, we'll assume if we reached here without breaking, it was mostly successful.
-        # A more robust solution would track success per batch.
-        if success: # Check the success of the last batch, or implement a cumulative success check
+        if file_ok:
             logger.info(f"  {filename}: {len(chunks)} Chunks geladen.")
             total_chunks += len(chunks)
         else:
