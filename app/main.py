@@ -469,23 +469,31 @@ async def generiere_schreiben(request: SchreibenRequest):
             "Bitte generiere jetzt den Brieftext (nur Fließtext)."
         )
         
-        # Nutzen der client library async via Task falls nicht nativ async implementiert
         import asyncio
         loop = asyncio.get_event_loop()
-        # Hinweis: gemini_client.generate_content ist u.U. synchron in diesem Projekt
-        response_text = await loop.run_in_executor(
-            None, 
-            lambda: gemini.generate_content(prompt, system_instruction=system_instruction)
-        )
-        
-        return {"brief_text": response_text.strip()}
-        
+        _waits = [20, 40]
+        for _attempt in range(3):
+            try:
+                response_text = await loop.run_in_executor(
+                    None,
+                    lambda: gemini.generate_content(prompt, system_instruction=system_instruction)
+                )
+                return {"brief_text": response_text.strip()}
+            except Exception as e:
+                err_str = str(e).lower()
+                is_quota = "quota" in err_str or "429" in err_str or "resource_exhausted" in err_str
+                if is_quota and _attempt < 2:
+                    logger.warning(f"/api/schreiben/: 429 Quota — warte {_waits[_attempt]}s (Retry {_attempt + 2}/3)...")
+                    await asyncio.sleep(_waits[_attempt])
+                    continue
+                logger.error(f"Fehler bei /api/schreiben/: {e}")
+                raise HTTPException(status_code=500, detail=f"Fehler bei der Brief-Generierung: {str(e)}")
+
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Fehler bei /api/schreiben/: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Fehler bei der Brief-Generierung: {str(e)}"
-        )
+        raise HTTPException(status_code=500, detail=f"Fehler bei der Brief-Generierung: {str(e)}")
 
 
 class AnalyseRequest(BaseModel):
@@ -549,31 +557,24 @@ async def analyse_text(request: AnalyseRequest):
         + rag_kontext
     )
 
-    try:
-        import asyncio
-        loop = asyncio.get_event_loop()
-        response_text = await loop.run_in_executor(
-            None,
-            lambda: gemini.generate(full_prompt)
-        )
-        return {"analyse": response_text.strip()}
-
-    except Exception as e:
-        err_str = str(e).lower()
-        if "quota" in err_str or "429" in err_str or "resource_exhausted" in err_str:
-            logger.warning(f"Gemini Quota erschöpft bei /api/analyse/: {e}")
-            raise HTTPException(
-                status_code=429,
-                detail=(
-                    "Gemini API Kontingent erschöpft. "
-                    "Bitte warte einige Minuten und versuche die Analyse erneut."
-                ),
-            )
-        logger.error(f"Fehler bei /api/analyse/: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail=f"Fehler bei der Analyse: {str(e)}"
-        )
+    import asyncio
+    loop = asyncio.get_event_loop()
+    _waits = [20, 40]
+    for _attempt in range(3):
+        try:
+            response_text = await loop.run_in_executor(None, lambda: gemini.generate(full_prompt))
+            return {"analyse": response_text.strip()}
+        except Exception as e:
+            err_str = str(e).lower()
+            is_quota = "quota" in err_str or "429" in err_str or "resource_exhausted" in err_str
+            if is_quota and _attempt < 2:
+                logger.warning(f"/api/analyse/: 429 Quota — warte {_waits[_attempt]}s (Retry {_attempt + 2}/3)...")
+                await asyncio.sleep(_waits[_attempt])
+                continue
+            if is_quota:
+                raise HTTPException(status_code=429, detail="Gemini API Kontingent erschöpft. Bitte warte einige Minuten.")
+            logger.error(f"Fehler bei /api/analyse/: {e}")
+            raise HTTPException(status_code=500, detail=f"Fehler bei der Analyse: {str(e)}")
 
 
 class DocsCreateRequest(BaseModel):

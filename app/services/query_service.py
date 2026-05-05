@@ -285,6 +285,27 @@ def _tab_hinweis(active_tab: str) -> str:
     return hinweise.get(active_tab, "")
 
 
+async def _gemini_retry(coro_func, beschreibung: str = "Gemini-Call"):
+    """
+    Führt einen async Gemini-Call mit Exponential-Backoff bei 429/RESOURCE_EXHAUSTED aus.
+    3 Versuche, Wartezeiten: 20s → 40s.
+    """
+    import asyncio
+    _waits = [20, 40]
+    for _attempt in range(3):
+        try:
+            return await coro_func()
+        except Exception as e:
+            err_str = str(e)
+            is_quota = "429" in err_str or "RESOURCE_EXHAUSTED" in err_str or "quota" in err_str.lower()
+            if is_quota and _attempt < 2:
+                _wait = _waits[_attempt]
+                logger.warning(f"{beschreibung}: 429 Quota — warte {_wait}s (Retry {_attempt + 2}/3)...")
+                await asyncio.sleep(_wait)
+                continue
+            raise
+
+
 # ===========================================================================
 # QUERY SERVICE
 # ===========================================================================
@@ -369,10 +390,13 @@ class QueryService:
         )
 
         try:
-            response = await gemini.client.aio.models.generate_content(
-                model=gemini.model_name,
-                contents=query,
-                config=config,
+            response = await _gemini_retry(
+                lambda: gemini.client.aio.models.generate_content(
+                    model=gemini.model_name,
+                    contents=query,
+                    config=config,
+                ),
+                "handle_query Tool-Detection",
             )
 
             if response.candidates and response.candidates[0].content.parts:
@@ -429,13 +453,16 @@ class QueryService:
         prompt = f"SYSTEM-WISSEN:\n{context_str}\n\nFRAGE DES NUTZERS:\n{query}"
 
         try:
-            response = await gemini.client.aio.models.generate_content(
-                model=gemini.model_name,
-                contents=prompt,
-                config=genai_types.GenerateContentConfig(
-                    system_instruction=system_prompt,
-                    temperature=0.2,
+            response = await _gemini_retry(
+                lambda: gemini.client.aio.models.generate_content(
+                    model=gemini.model_name,
+                    contents=prompt,
+                    config=genai_types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=0.2,
+                    ),
                 ),
+                "handle_query System-Antwort",
             )
             answer_text = response.text.strip() if response.text else ""
             if answer_text:
@@ -647,8 +674,20 @@ class QueryService:
         import asyncio
         full_prompt = f"{system_instruction}\n\n{prompt}"
         loop = asyncio.get_event_loop()
-        response_text = await loop.run_in_executor(None, gemini.generate, full_prompt)
-        
+        _waits = [20, 40]
+        for _attempt in range(3):
+            try:
+                response_text = await loop.run_in_executor(None, gemini.generate, full_prompt)
+                break
+            except Exception as e:
+                err_str = str(e).lower()
+                is_quota = "quota" in err_str or "429" in err_str or "resource_exhausted" in err_str
+                if is_quota and _attempt < 2:
+                    logger.warning(f"_erstelle_brief_aus_kontext: 429 Quota — warte {_waits[_attempt]}s (Retry {_attempt + 2}/3)...")
+                    await asyncio.sleep(_waits[_attempt])
+                    continue
+                raise
+
         return {
             "brief_text": response_text.strip(),
             "schreiben_typ": schreiben_typ or "sonstig"
@@ -1341,10 +1380,13 @@ Beginne jetzt mit "BETREFF:"."""
         )
 
         try:
-            response = await gemini.client.aio.models.generate_content(
-                model=gemini.model_name,
-                contents=[{"role": "user", "parts": [{"text": "Schreibe jetzt den Brief."}]}],
-                config=config,
+            response = await _gemini_retry(
+                lambda: gemini.client.aio.models.generate_content(
+                    model=gemini.model_name,
+                    contents=[{"role": "user", "parts": [{"text": "Schreibe jetzt den Brief."}]}],
+                    config=config,
+                ),
+                "Brief Stage-2",
             )
         except Exception as e:
             err_str = str(e)
@@ -2454,10 +2496,13 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
 
         # Gemini aufrufen mit Function Calling
         try:
-            response = await gemini.client.aio.models.generate_content(
-                model=gemini.model_name,
-                contents=contents,
-                config=config,
+            response = await _gemini_retry(
+                lambda: gemini.client.aio.models.generate_content(
+                    model=gemini.model_name,
+                    contents=contents,
+                    config=config,
+                ),
+                "Akte-Chat",
             )
         except Exception as e:
             err_str = str(e)
@@ -2511,8 +2556,11 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
             contents.append(genai_types.Content(role="user", parts=response_parts))
 
             try:
-                response = await gemini.client.aio.models.generate_content(
-                    model=gemini.model_name, contents=contents, config=config,
+                response = await _gemini_retry(
+                    lambda: gemini.client.aio.models.generate_content(
+                        model=gemini.model_name, contents=contents, config=config,
+                    ),
+                    "Akte-Chat Tool-Antwort",
                 )
             except Exception as e:
                 err_str = str(e)
