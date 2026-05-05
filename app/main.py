@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Any
 import logging
+import logging.handlers
 import uuid
 import asyncio
 
@@ -18,10 +19,21 @@ from app.services.query_service import query_service
 from app.job_tracker import job_tracker
 
 # Configure logging
-logging.basicConfig(
-    level=settings.log_level,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+_log_format = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+logging.basicConfig(level=settings.log_level, format=_log_format)
+
+if settings.log_file:
+    import os as _os
+    _os.makedirs(_os.path.dirname(settings.log_file), exist_ok=True)
+    _fh = logging.handlers.RotatingFileHandler(
+        settings.log_file,
+        maxBytes=10 * 1024 * 1024,  # 10 MB
+        backupCount=3,
+        encoding="utf-8",
+    )
+    _fh.setFormatter(logging.Formatter(_log_format))
+    logging.getLogger().addHandler(_fh)
+
 logger = logging.getLogger(__name__)
 
 # Initialize FastAPI app
