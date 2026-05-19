@@ -927,14 +927,17 @@ class QueryService:
                     return stage2
 
                 elif tool_name == "erstelle_brief":
+                    brief_payload = {
+                        "akte_id": args["akte_id"],
+                        "brief_text": args.get("brief_text", ""),
+                        "betreff": args.get("betreff", ""),
+                        "empfaenger": args.get("empfaenger", "versicherung"),
+                    }
+                    if args.get("drittbeteiligter_id"):
+                        brief_payload["drittbeteiligter_id"] = args["drittbeteiligter_id"]
                     resp = await client.post(
                         f"{self.django_base}/api/ai/actions/erstelle_brief/",
-                        json={
-                            "akte_id": args["akte_id"],
-                            "brief_text": args.get("brief_text", ""),
-                            "betreff": args.get("betreff", ""),
-                            "empfaenger": args.get("empfaenger", "versicherung"),
-                        },
+                        json=brief_payload,
                         headers=headers
                     )
                     result = _safe_json(resp)
@@ -1862,6 +1865,13 @@ Analysiere JETZT und liefere das JSON-Array der Vorschläge."""
             for d in dokumente_raw
         ) if dokumente_raw else "Keine Dokumente vorhanden."
 
+        # Drittbeteiligte lesbar formatieren
+        drittbeteiligte_raw = kontext.get('drittbeteiligte', [])
+        drittbeteiligte_text = "\n".join(
+            f"  - ID:{d.get('id')} | {d.get('name', '?')} [{d.get('typ', '–')}] | {d.get('strasse', '')} {d.get('hausnummer', '')}, {d.get('plz', '')} {d.get('stadt', '')}".strip()
+            for d in drittbeteiligte_raw
+        ) if drittbeteiligte_raw else "Keine Drittbeteiligten eingetragen."
+
         # Generierte Briefe (KI-erstellte Schreiben) mit Inhalt-Snippet
         gen_docs_raw = kontext.get('generierte_dokumente', [])
         if gen_docs_raw:
@@ -1931,6 +1941,9 @@ FINANZDATEN (bereits vollständig geladen):
 
 DOKUMENTE IN DER AKTE (hochgeladene Dateien, Scans — Metadaten):
 {dokumente_text}
+
+DRITTBETEILIGTE IN DER AKTE (ID für erstelle_brief angeben wenn empfaenger='drittbeteiligte'):
+{drittbeteiligte_text}
 
 KANZLEI-ABKÜRZUNGEN (in Dokumenttiteln und Texten — verbindlich für die gesamte Akte):
 Mdt. / MDT  = Mandant          |  Vers. / VERS  = Versicherung / Gegner
@@ -2252,8 +2265,8 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                             "type": "OBJECT",
                             "properties": {
                                 "akte_id": {"type": "INTEGER"},
-                                "brief_zweck": {"type": "STRING", "description": "Kurze Kategorie des Briefes in Snake-Case. Beispiele: 'erstanschreiben_versicherung', 'erstanschreiben_mandant', 'widerspruch_sv_honorar_kuerzung', 'widerspruch_nutzungsausfall', 'mahnung_vor_klage', 'sachstandsinfo_mandant'. Wird für Goldstandard-RAG-Query verwendet — je präziser, desto bessere Stilvorlagen."},
-                                "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
+                                "brief_zweck": {"type": "STRING", "description": "Kurze Kategorie des Briefes in Snake-Case. Beispiele: 'erstanschreiben_versicherung', 'erstanschreiben_mandant', 'erstanschreiben_drittbeteiligter', 'widerspruch_sv_honorar_kuerzung', 'widerspruch_nutzungsausfall', 'mahnung_vor_klage', 'sachstandsinfo_mandant'. Wird für Goldstandard-RAG-Query verwendet — je präziser, desto bessere Stilvorlagen."},
+                                "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant", "drittbeteiligte"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert; 'drittbeteiligte' = an einen Drittbeteiligten (Zeuge, SV, Leasingfirma etc.) — dann drittbeteiligter_id angeben"},
                                 "ton": {"type": "STRING", "enum": ["forsch", "sachlich", "deeskalierend"], "description": "Tonvorgabe für Stage 2. Schlage anhand Kontext vor: Erstanschreiben = sachlich; zweiter Widerspruch / Mahnung = forsch; Schreiben an eigenen Mandanten = sachlich oder deeskalierend. User kann per Chat korrigieren — dann Tool erneut mit angepasstem ton rufen."},
                                 "fakten": {
                                     "type": "ARRAY",
@@ -2302,7 +2315,8 @@ Einzige Ausnahme: brief_text_vorlage ist leer oder fehlt → dann erst den User 
                             "type": "OBJECT",
                             "properties": {
                                 "akte_id": {"type": "INTEGER"},
-                                "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert"},
+                                "empfaenger": {"type": "STRING", "enum": ["versicherung", "mandant", "drittbeteiligte"], "description": "'versicherung' = an Gegner/Versicherung adressiert; 'mandant' = an Mandant adressiert; 'drittbeteiligte' = an einen Drittbeteiligten — dann drittbeteiligter_id pflichtangabe"},
+                                "drittbeteiligter_id": {"type": "INTEGER", "description": "ID des Drittbeteiligten aus DRITTBETEILIGTE IN DER AKTE. Pflichtfeld wenn empfaenger='drittbeteiligte'."},
                                 "betreff": {"type": "STRING", "description": "Betreffzeile des Briefes. NUR das Thema, z.B. 'Schadensregulierung – Unfall vom 10.03.2026' oder 'Sachstandsinformation'. NIEMALS Aktenzeichen (z.B. '08.26.awr') einschließen — das wird vom Template automatisch ergänzt."},
                                 "brief_text": {"type": "STRING", "description": "Nur der Fließtext des Briefinhalts. KEIN Briefkopf, KEIN Datum, KEINE Anrede ('Sehr geehrte...'), KEIN Schluss ('Mit freundlichen Grüßen'), KEIN 'Unser Zeichen', KEIN Aktenzeichen. Diese Teile werden automatisch aus der Vorlage ergänzt. FORMATIERUNG: Absätze und Listenpunkte mit doppelter Leerzeile (\\n\\n) trennen — einzelnes \\n wird zu Leerzeichen zusammengeführt."}
                             },
