@@ -56,7 +56,9 @@ cache/
 rag_storage/
 
 # Claude Code
-.claude/
+.claude/*
+!.claude/memory
+!.claude/memory/**
 
 # Google Credentials (NIEMALS einchecken!)
 google_service_account.json
